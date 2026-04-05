@@ -67,6 +67,11 @@ Kubernetes (minikube) + HPA Autoscaling
 RAGAS Eval Suite (50Q) + GitHub Actions CI/CD Gate
 Evidently Embedding Drift Monitoring
 ```
+## Setup
+1. Clone the repo
+2. Copy `.env.example` → `.env`
+3. Fill in your API keys
+4. Run `pip install -r requirements.txt`
 
 ## Key Engineering Decisions
 
