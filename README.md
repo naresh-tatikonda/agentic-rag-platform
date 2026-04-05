@@ -2,8 +2,10 @@
 
 # FinSight AI — Agentic RAG Platform for SEC Financial Intelligence
 
-> Production-grade multi-agent RAG system for SEC 10-K analysis.  
-> Built to demonstrate L5 MLOps / AI Production Engineering competency.
+Multi-agent financial analysis platform processing SEC 10-K filings.
+Hybrid semantic + keyword retrieval with pgvector HNSW + BM25,
+LangGraph orchestration with cost routing, p99 latency monitoring,
+and automated RAG quality evaluation via RAGAS.
 
 ![Python](https://img.shields.io/badge/Python-3.12-blue)
 ![LangGraph](https://img.shields.io/badge/LangGraph-Multi--Agent-green)
