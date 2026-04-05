@@ -5,9 +5,9 @@ QueryAnalyzer Node — the first node in the LangGraph pipeline.
 
 Responsibility:
     Takes the raw user query and uses an LLM to extract:
-    - ticker   : stock symbol (e.g. "AAPL")
-    - year     : fiscal year  (e.g. 2023)
-    - intent   : query intent (e.g. "risk_analysis")
+    - ticker      : stock symbol (e.g. "AAPL")
+    - fiscal_year : fiscal year the 10-K covers (e.g. 2023)
+    - intent      : query intent (e.g. "risk_analysis")
 
 Why an LLM for extraction?
     User queries are messy: "What risks did Apple face last year?"
@@ -15,7 +15,7 @@ Why an LLM for extraction?
     An LLM handles this naturally via structured JSON output.
 
 Output:
-    Updates AgentState with: ticker, year, intent
+    Updates AgentState with: ticker, fiscal_year, intent
 """
 
 import json
@@ -48,14 +48,15 @@ SYSTEM_PROMPT = """You are a financial query analyzer. Extract structured inform
 Return ONLY a valid JSON object with these fields:
 {
   "ticker": "<stock ticker symbol in uppercase, or null if not found>",
-  "year": <4-digit fiscal year as integer, or null if not found>,
+  "fiscal_year": <4-digit fiscal year as integer, or null if not found>,
   "intent": "<one of: risk_analysis | revenue_summary | business_overview | general>"
 }
 
 Rules:
 - Convert company names to tickers: Apple → AAPL, Microsoft → MSFT, Google → GOOGL
+- fiscal_year is the year the 10-K COVERS (e.g. FY2023), not the filing date
 - Convert relative years: "last year" → current year minus 1
-- Default year to 2023 if no year is mentioned
+- Default fiscal_year to 2023 if no year is mentioned
 - Default intent to "general" if unclear
 - Return ONLY the JSON object, no explanation
 """
@@ -63,13 +64,13 @@ Rules:
 
 def query_analyzer_node(state: AgentState) -> AgentState:
     """
-    LangGraph node function — reads query from state, writes ticker/year/intent.
+    LangGraph node function — reads query from state, writes ticker/fiscal_year/intent.
 
     Args:
         state: Current AgentState passed by LangGraph runtime
 
     Returns:
-        Partial AgentState update with ticker, year, intent populated
+        Partial AgentState update with ticker, fiscal_year, intent populated
     """
     query = state["query"]
     logger.info(f"QueryAnalyzer received query: {query}")
@@ -94,27 +95,27 @@ def query_analyzer_node(state: AgentState) -> AgentState:
         extracted = json.loads(raw)
 
         # ── Validate and sanitize extracted fields ────────────────────────────
-        ticker = extracted.get("ticker")
-        year   = extracted.get("year")
-        intent = extracted.get("intent", "general")
+        ticker      = extracted.get("ticker")
+        fiscal_year = extracted.get("fiscal_year")
+        intent      = extracted.get("intent", "general")
 
         # Ensure intent is one of the supported values
         if intent not in VALID_INTENTS:
             intent = "general"
 
-        logger.info(f"QueryAnalyzer extracted → ticker={ticker}, year={year}, intent={intent}")
+        logger.info(f"QueryAnalyzer extracted → ticker={ticker}, fiscal_year={fiscal_year}, intent={intent}")
 
         return {
-            "ticker": ticker,
-            "year":   year,
-            "intent": intent,
+            "ticker":      ticker,
+            "fiscal_year": fiscal_year,
+            "intent":      intent,
         }
 
     except (json.JSONDecodeError, KeyError) as e:
         # ── Graceful fallback — never crash the pipeline ──────────────────────
         logger.warning(f"QueryAnalyzer parse failed: {e}. Using defaults.")
         return {
-            "ticker": None,
-            "year":   2025,
-            "intent": "general",
+            "ticker":      None,
+            "fiscal_year": 2023,
+            "intent":      "general",
         }

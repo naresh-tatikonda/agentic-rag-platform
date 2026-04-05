@@ -4,7 +4,7 @@ agents/nodes/sec_retriever.py
 SECRetriever Node — second node in the LangGraph pipeline.
 
 Responsibility:
-    Uses ticker, year, and intent from AgentState to retrieve
+    Uses ticker, fiscal_year, and intent from AgentState to retrieve
     the most relevant chunks from pgvector using hybrid search:
     - HNSW vector search  : semantic similarity (dense retrieval)
     - BM25 / GIN index    : keyword match (sparse retrieval)
@@ -16,7 +16,7 @@ Why hybrid search?
 
 Table schema (sec_filings):
     id, ticker, filing_type, filed_date, cik,
-    chunk_index, chunk_text, embedding, created_at
+    chunk_index, chunk_text, embedding, created_at, fiscal_year
 
 Output:
     Updates AgentState with: retrieved_chunks, retrieval_scores
@@ -39,6 +39,7 @@ TOP_K = 5
 EMBEDDING_MODEL = "text-embedding-3-small"   # Must match ingestion model
 
 # ── Intent → keyword boost mapping ───────────────────────────────────────────
+# Appending intent keywords improves vector search relevance for specific intents
 INTENT_KEYWORDS = {
     "risk_analysis":     "risk factors threats litigation regulatory",
     "revenue_summary":   "revenue earnings net income financial results",
@@ -74,21 +75,21 @@ def sec_retriever_node(state: AgentState) -> AgentState:
     Hybrid search strategy:
         1. Embed the query using OpenAI text-embedding-3-small
         2. Run HNSW vector search (cosine similarity via pgvector <=> operator)
-        3. Filter by ticker and filing year extracted from filed_date
+        3. Filter by ticker and fiscal_year column (not filed_date)
         4. Return top-k chunks with similarity scores
 
     Args:
-        state: Current AgentState with ticker, year, intent populated
+        state: Current AgentState with ticker, fiscal_year, intent populated
 
     Returns:
         Partial AgentState update with retrieved_chunks and retrieval_scores
     """
-    query  = state["query"]
-    ticker = state.get("ticker") or "AAPL"
-    year   = state.get("year")   or 2025
-    intent = state.get("intent") or "general"
+    query       = state["query"]
+    ticker      = state.get("ticker")      or "AAPL"
+    fiscal_year = state.get("fiscal_year") or 2023    # fiscal_year column in DB
+    intent      = state.get("intent")      or "general"
 
-    logger.info(f"SECRetriever searching ticker={ticker}, year={year}, intent={intent}")
+    logger.info(f"SECRetriever searching ticker={ticker}, fiscal_year={fiscal_year}, intent={intent}")
 
     # ── Enrich query with intent-specific keywords for better recall ──────────
     keyword_boost  = INTENT_KEYWORDS.get(intent, "")
@@ -103,7 +104,7 @@ def sec_retriever_node(state: AgentState) -> AgentState:
         cur  = conn.cursor()
 
         # ── Hybrid search query ───────────────────────────────────────────────
-        # Filters by ticker and year using EXTRACT on filed_date
+        # Filters by ticker and fiscal_year column (correctly set during ingestion fix)
         # Orders by cosine distance (HNSW index via <=> operator)
         sql = """
             SELECT
@@ -112,7 +113,7 @@ def sec_retriever_node(state: AgentState) -> AgentState:
             FROM sec_filings
             WHERE
                 ticker = %s
-                AND EXTRACT(YEAR FROM filed_date) = %s
+                AND fiscal_year = %s
             ORDER BY embedding <=> %s::vector
             LIMIT %s;
         """
@@ -120,7 +121,7 @@ def sec_retriever_node(state: AgentState) -> AgentState:
         cur.execute(sql, (
             embedding_str,   # For similarity score calculation
             ticker,          # Filter by stock ticker
-            year,            # Filter by filing year from filed_date
+            fiscal_year,     # Filter by fiscal year (not filed_date)
             embedding_str,   # For ORDER BY cosine distance
             TOP_K,
         ))
@@ -130,7 +131,7 @@ def sec_retriever_node(state: AgentState) -> AgentState:
         conn.close()
 
         if not rows:
-            logger.warning(f"No chunks found for ticker={ticker}, year={year}")
+            logger.warning(f"No chunks found for ticker={ticker}, fiscal_year={fiscal_year}")
             return {"retrieved_chunks": [], "retrieval_scores": []}
 
         chunks = [row[0] for row in rows]

@@ -9,10 +9,15 @@ data passing needed between agents.
 
 Flow:
     User Query
-        → QueryAnalyzer   (populates: ticker, year, intent)
+        → QueryAnalyzer   (populates: ticker, fiscal_year, intent)
         → SECRetriever    (populates: retrieved_chunks, retrieval_scores)
         → MarketAnalyst   (populates: draft_answer)
         → Critic          (populates: quality_score, final_answer)
+
+Schema note:
+    fiscal_year = the fiscal year the 10-K COVERS (e.g. 2023)
+                  NOT the date the filing was downloaded or stored.
+                  This maps directly to the fiscal_year column in sec_filings table.
 """
 
 from typing_extensions import TypedDict
@@ -31,9 +36,10 @@ class AgentState(TypedDict):
 
     # ── Query Analysis (populated by QueryAnalyzerNode) ──────────────────
     ticker: Optional[str]               # Extracted stock ticker e.g. "AAPL"
-    year: Optional[int]                 # Extracted fiscal year e.g. 2023
+    fiscal_year: Optional[int]          # Fiscal year the 10-K covers e.g. 2023
+                                        # Distinct from filed_date in DB
     intent: Optional[str]               # Classified intent: "risk_analysis" |
-                                        # "revenue_summary" | "general"
+                                        # "revenue_summary" | "business_overview" | "general"
 
     # ── Retrieval (populated by SECRetrieverNode) ─────────────────────────
     retrieved_chunks: Optional[List[str]]     # Top-k text chunks from pgvector
