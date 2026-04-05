@@ -29,24 +29,41 @@ Yahoo Finance, scores confidence, and returns a cited, auditable answer.
 
 ## Architecture
 
-EDGAR API → Ingestion Pipeline → pgvector (HNSW) + BM25 (GIN) Index
-↓
+EDGAR API
+│
+▼
+Ingestion Pipeline
+(Downloader → Parser → Chunker → Embedder)
+│
+▼
+pgvector (HNSW) + BM25 (GIN Index)
+│
+▼
 LangGraph Multi-Agent Orchestrator
 ├── Query Analyzer Node
 ├── SEC Retriever Agent (hybrid search)
 ├── Market Analyst Agent (Yahoo Finance API)
 └── Critic Node (confidence scoring + rewrite loop)
-↓
+│
+▼
 Cost-Aware Router (GPT-4o-mini ↔ GPT-4o)
-↓
-FastAPI Serving Layer (rate limiting, auth)
-↓
-Observability: LangSmith + Prometheus + Grafana
-↓
+│
+▼
+FastAPI Serving Layer (rate limiting + auth middleware)
+│
+▼
+Observability Stack
+├── LangSmith (trace + eval)
+├── Prometheus (metrics)
+└── Grafana (latency P95, cost/query, confidence)
+│
+▼
 Kubernetes (minikube) + HPA Autoscaling
-↓
-RAGAS Eval Suite + GitHub Actions CI/CD Gate
+│
+▼
+RAGAS Eval Suite (50Q) + GitHub Actions CI/CD Gate
 
+    Evidently Embedding Drift Monitoring
 
 ---
 
