@@ -115,6 +115,6 @@ def query_analyzer_node(state: AgentState) -> AgentState:
         logger.warning(f"QueryAnalyzer parse failed: {e}. Using defaults.")
         return {
             "ticker": None,
-            "year":   2023,
+            "year":   2025,
             "intent": "general",
         }
