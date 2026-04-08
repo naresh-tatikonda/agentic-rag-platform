@@ -19,9 +19,11 @@ import time
 from datetime import datetime, timezone
 from fastapi import APIRouter
 from app.models.schemas import QueryRequest, QueryResponse
+from app.logger import get_logger, log_query_request      
 from agents.graph import compiled_graph
 
 router = APIRouter()
+logger = get_logger("query")
 
 
 @router.post("/query", response_model=QueryResponse, tags=["RAG"])
@@ -36,32 +38,64 @@ async def run_query(request: QueryRequest):
 
     # Capture start time before graph runs — used to compute latency
     start_time = time.perf_counter()
+    error_message = None
 
     # Build initial AgentState — only populate input fields here
     # Each agent node populates its own fields as the graph runs
-    initial_state = {
-        "query": request.query,
-        "ticker": request.ticker,
-        "fiscal_year": request.fiscal_year,
-        "retry_count": 0,          # always start at 0
-    }
+    try:
+        initial_state = {
+            "query": request.query,
+            "ticker": request.ticker,
+            "fiscal_year": request.fiscal_year,
+            "retry_count": 0,          # always start at 0
+        }
 
-    # Invoke compiled LangGraph graph — this runs all 4 nodes sequentially
-    # with conditional retry edge from Critic back to SECRetriever
-    result = compiled_graph.invoke(initial_state)
+        # Invoke compiled LangGraph graph — this runs all 4 nodes sequentially
+        # with conditional retry edge from Critic back to SECRetriever
+        result = compiled_graph.invoke(initial_state)
 
-    # Calculate total end-to-end latency in milliseconds
-    latency_ms = (time.perf_counter() - start_time) * 1000
+        # Calculate total end-to-end latency in milliseconds
+        latency_ms = (time.perf_counter() - start_time) * 1000
 
-    # Map AgentState output fields to QueryResponse Pydantic model
-    return QueryResponse(
-        final_answer=result.get("final_answer", "No answer generated"),
-        ticker=result.get("ticker", request.ticker),
-        fiscal_year=result.get("fiscal_year", request.fiscal_year),
-        intent=result.get("intent"),
-        quality_score=result.get("quality_score", 0.0),
-        retrieval_scores=result.get("retrieval_scores", []),
-        retry_count=result.get("retry_count", 0),
-        latency_ms=round(latency_ms, 2),
-        timestamp=datetime.now(timezone.utc),
-    )
+        # Log successful request
+        log_query_request(
+            logger=logger,
+            query=request.query,
+            ticker=result.get("ticker", request.ticker),
+            fiscal_year=result.get("fiscal_year", request.fiscal_year),
+            intent=result.get("intent"),
+            quality_score=result.get("quality_score", 0.0),
+            retry_count=result.get("retry_count", 0),
+            latency_ms=latency_ms,
+        )    
+
+        # Map AgentState output fields to QueryResponse Pydantic model
+        return QueryResponse(
+            final_answer=result.get("final_answer", "No answer generated"),
+            ticker=result.get("ticker", request.ticker),
+            fiscal_year=result.get("fiscal_year", request.fiscal_year),
+            intent=result.get("intent"),
+            quality_score=result.get("quality_score", 0.0),
+            retrieval_scores=result.get("retrieval_scores", []),
+            retry_count=result.get("retry_count", 0),
+            latency_ms=round(latency_ms, 2),
+            timestamp=datetime.now(timezone.utc),
+        )
+
+    except Exception as e:                          
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        error_message = str(e)
+
+        # Log failed request
+        log_query_request(
+            logger=logger,
+            query=request.query,
+            ticker=request.ticker,
+            fiscal_year=request.fiscal_year,
+            intent=None,
+            quality_score=0.0,
+            retry_count=0,
+            latency_ms=latency_ms,
+            error=error_message,
+        )
+        raise   # re-raise so FastAPI returns 500
