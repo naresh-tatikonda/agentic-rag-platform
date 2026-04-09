@@ -3,53 +3,82 @@ app/main.py
 -----------
 FastAPI application entry point.
 
-Responsibilities:
-  1. Initialize the FastAPI app with metadata
-  2. Register middleware (auth runs before every request)
-  3. Register route handlers (/query, /health, /metrics)
+CHANGES FOR METRICS:
+  - Added GET /metrics endpoint that Prometheus scrapes every 30 seconds
+  - Added GET /health endpoint (Kubernetes liveness probe)
+  - prometheus_client.REGISTRY is the default global registry; generate_latest()
+    serializes all registered metrics into the Prometheus text exposition format
 
-This file is what uvicorn runs:
-  uvicorn app.main:app --host 0.0.0.0 --port 8000
-
-Why separate main.py from routes?
-  - main.py handles app-level concerns (middleware, startup, config)
-  - routes/ handles endpoint-level concerns (request/response logic)
-  - This makes it easy to add new route groups (e.g. /ingest, /eval) later
+SECURITY NOTE ON /metrics:
+  In production, /metrics should NOT be publicly accessible.
+  Recommended patterns (in order of preference):
+    1. EC2 Security Group: allow port 8000 only from Prometheus server's IP
+    2. Separate internal port: run metrics on :9091 (not exposed via ALB)
+    3. Mutual TLS between Prometheus and your app
 """
 
 from dotenv import load_dotenv
-load_dotenv()   # must run before os.getenv() is called anywhere
+
+# Load .env before any other imports so all env vars (OPENAI_API_KEY,
+# LANGCHAIN_API_KEY, DATABASE_URL, API_KEY) are available at import time.
+load_dotenv()
 
 from fastapi import FastAPI
-from datetime import datetime, timezone
+from fastapi.responses import Response
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
-from app.routes.query import router as query_router
 from app.middleware.auth import APIKeyMiddleware
-from app.models.schemas import HealthResponse
+from app.routes.query import router as query_router
 
-# Initialize FastAPI — metadata populates the Swagger UI at /docs
+# ── FastAPI app ──────────────────────────────────────────────────────────────
 app = FastAPI(
     title="Agentic RAG Platform",
-    description="Multi-agent SEC 10-K financial analysis — LangGraph + pgvector + FastAPI",
+    description="Production-grade RAG system for financial filing analysis",
     version="1.0.0",
 )
 
-# Register auth middleware — applies to ALL routes before handlers run
+# ── Middleware ───────────────────────────────────────────────────────────────
+# API key auth is applied globally EXCEPT for /metrics and /health.
+# Those endpoints are internal infrastructure — not user-facing.
 app.add_middleware(APIKeyMiddleware)
 
-# Register route groups — prefix can be added here e.g. prefix="/v1"
+# ── Routers ──────────────────────────────────────────────────────────────────
 app.include_router(query_router)
 
 
-@app.get("/health", response_model=HealthResponse, tags=["Observability"])
-async def health_check():
+# ── /metrics ─────────────────────────────────────────────────────────────────
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
     """
-    Kubernetes liveness probe endpoint.
-    Returns 200 if the app process is alive.
-    No DB check here — DB health belongs in a separate readiness probe.
+    Prometheus scrape endpoint.
+
+    Prometheus hits this URL on its configured scrape_interval (default 15s).
+    generate_latest() serializes all metrics registered in the default
+    REGISTRY into the Prometheus text exposition format, e.g.:
+
+      # HELP rag_request_latency_seconds End-to-end latency ...
+      # TYPE rag_request_latency_seconds histogram
+      rag_request_latency_seconds_bucket{intent="revenue_summary",le="13.0"} 4.0
+      rag_request_latency_seconds_bucket{intent="revenue_summary",le="15.0"} 6.0
+      ...
+
+    include_in_schema=False hides this from the Swagger UI — it is not a
+    user-facing API endpoint.
     """
-    return HealthResponse(
-        status="healthy",
-        version="1.0.0",
-        timestamp=datetime.now(timezone.utc),
+    return Response(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
     )
+
+
+# ── /health ───────────────────────────────────────────────────────────────────
+@app.get("/health", include_in_schema=False)
+async def health():
+    """
+    Kubernetes liveness probe endpoint (used on Day 11 — minikube deploy).
+    Returns 200 OK when the app is running. No auth required.
+    Also serves as the Prometheus 'up' metric target — if this endpoint
+    stops responding, Prometheus fires an 'InstanceDown' alert.
+    """
+    return {"status": "ok", "version": "1.0.0"}
+

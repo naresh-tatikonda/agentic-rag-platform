@@ -21,6 +21,14 @@ from fastapi import APIRouter
 from app.models.schemas import QueryRequest, QueryResponse
 from app.logger import get_logger, log_query_request      
 from agents.graph import compiled_graph
+# Import from central metrics module — never instantiate metrics here directly
+# as that causes duplicate registration errors on hot reload.
+from app.metrics import (
+    RAG_LATENCY,
+    RAG_QUALITY_SCORE,
+    RAG_RETRY_TOTAL,
+    RAG_REQUESTS_TOTAL,
+)
 
 router = APIRouter()
 logger = get_logger("query")
@@ -40,6 +48,9 @@ async def run_query(request: QueryRequest):
     start_time = time.perf_counter()
     error_message = None
 
+    intent = "unknown"   # populated by QueryAnalyzerNode inside the graph
+    status = "error"     # updated to "success" if graph completes cleanly
+
     # Build initial AgentState — only populate input fields here
     # Each agent node populates its own fields as the graph runs
     try:
@@ -56,6 +67,20 @@ async def run_query(request: QueryRequest):
 
         # Calculate total end-to-end latency in milliseconds
         latency_ms = (time.perf_counter() - start_time) * 1000
+
+         # UNPACK RESULT — extract real values from AgentState
+        intent        = result.get("intent", "unknown")
+        quality_score = result.get("quality_score", 0.0)
+        retry_count   = result.get("retry_count", 0)
+        latency_s     = latency_ms / 1000
+
+        # RECORD METRICS — after unpack, before return
+        RAG_LATENCY.labels(intent=intent).observe(latency_s)
+        RAG_QUALITY_SCORE.labels(intent=intent).set(quality_score)
+        if retry_count > 0:
+            RAG_RETRY_TOTAL.labels(intent=intent).inc(retry_count)
+        RAG_REQUESTS_TOTAL.labels(intent=intent, status="success").inc()
+
 
         # Log successful request
         log_query_request(
@@ -85,6 +110,10 @@ async def run_query(request: QueryRequest):
     except Exception as e:                          
         latency_ms = (time.perf_counter() - start_time) * 1000
         error_message = str(e)
+
+        # ERROR METRICS — uses defaults from step 1 if graph never ran
+        RAG_LATENCY.labels(intent=intent).observe(latency_s)
+        RAG_REQUESTS_TOTAL.labels(intent=intent, status="error").inc()
 
         # Log failed request
         log_query_request(

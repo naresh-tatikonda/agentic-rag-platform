@@ -90,7 +90,7 @@ platformdirs==4.9.4
 plotly==5.24.1
 pluggy==1.6.0
 polyfactory==3.3.0
-prometheus_client==0.24.1
+prometheus_client==0.21.0
 propcache==0.4.1
 protobuf==6.33.6
 psycopg2-binary==2.9.11
