@@ -1,0 +1,98 @@
+# monitoring/docker-compose.yml
+# ------------------------------
+# Spins up Prometheus + Grafana as a local observability stack.
+#
+# WHY DOCKER COMPOSE:
+#   - One command (docker compose up -d) starts both services
+#   - Each service is isolated — Grafana can't pollute Prometheus's filesystem
+#   - Direct translation to Kubernetes Deployments 
+#   - Version-pinned images = reproducible across environments
+#
+# ARCHITECTURE:
+#   FastAPI (host:8000) ← scraped by → Prometheus (container:9090)
+#                                              ↑ queried by
+#                                       Grafana (container:3000)
+
+services:
+
+  # ── Prometheus ─────────────────────────────────────────────────────────────
+  prometheus:
+    # Pin to a specific version — never use :latest in production or demos.
+    # :latest can silently break your setup when a new version ships.
+    image: prom/prometheus:v2.53.0
+
+    container_name: prometheus
+
+    ports:
+      # Expose Prometheus UI on host port 9090.
+      # Access at http://<your-ec2-ip>:9090 to run PromQL queries manually.
+      - "9090:9090"
+
+    volumes:
+      # Mount our prometheus.yml into the container at the path Prometheus
+      # expects its config. Read-only (:ro) — container should never write
+      # back to our config file.
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+      # Named volume for persistent TSDB storage.
+      # Without this, all scraped data is lost when the container restarts.
+      # Prometheus keeps 15 days of data by default.
+      - prometheus_data:/prometheus
+
+    command:
+      # Pass CLI flags to the Prometheus binary inside the container.
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      # How long to retain data — 15 days is standard for a dev/demo setup.
+      # Production setups use remote storage (Thanos, Cortex) for longer retention.
+      - "--storage.tsdb.retention.time=15d"
+      # Enable the web UI and API — needed for Grafana to query Prometheus.
+      - "--web.enable-lifecycle"
+
+    # Always restart unless manually stopped — survives EC2 reboots.
+    restart: unless-stopped
+
+    # Add host.docker.internal so Prometheus can reach FastAPI on the EC2 host.
+    # Without this, host.docker.internal doesn't resolve on Linux Docker hosts.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ── Grafana ────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.0
+
+    container_name: grafana
+
+    ports:
+      # Expose Grafana UI on host port 3000.
+      # Access at http://<your-ec2-ip>:3000
+      - "3000:3000"
+
+    environment:
+      # Default admin credentials — change in production.
+      # For this demo/interview project, these are fine.
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      # Disable Grafana's telemetry reporting — not needed for demos.
+      - GF_REPORTING_ENABLED=false
+
+    volumes:
+      # Persist Grafana dashboards, datasources, and settings across restarts.
+      # Without this, you'd have to reconfigure Grafana every time it restarts.
+      - grafana_data:/var/lib/grafana
+      # Mount provisioning directory so Grafana auto-loads datasources on start
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+
+    # Grafana must start after Prometheus — it needs Prometheus as a data source.
+    depends_on:
+      - prometheus
+
+    restart: unless-stopped
+
+# ── Named Volumes ─────────────────────────────────────────────────────────────
+# Docker manages these volumes on the host filesystem.
+# Data persists across container restarts and upgrades.
+# To wipe all data and start fresh: docker compose down -v
+volumes:
+  prometheus_data:
+  grafana_data:

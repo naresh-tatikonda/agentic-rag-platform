@@ -1,0 +1,36 @@
+# monitoring/grafana/provisioning/datasources/prometheus.yml
+# -----------------------------------------------------------
+# Grafana provisioning file — auto-configures Prometheus as a datasource
+# when Grafana starts for the first time.
+#
+# WHY PROVISIONING INSTEAD OF MANUAL UI SETUP:
+#   - Reproducible: works the same on every fresh deployment
+#   - Version-controlled: lives in Git
+#   - Kubernetes-ready: mounts as a ConfigMap 
+#   - No manual clicking: docker compose up gives a fully working stack
+#
+# Grafana reads all files in /etc/grafana/provisioning/datasources/
+# at startup and applies them automatically.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    # Grafana's built-in Prometheus datasource plugin
+    type: prometheus
+
+    # Default: this datasource is pre-selected in new panels
+    isDefault: true
+
+    # URL Grafana uses to query Prometheus.
+    # "prometheus" resolves to the Prometheus container via Docker's
+    # internal DNS — containers on the same compose network reach
+    # each other by service name, not by localhost or IP.
+    url: http://prometheus:9090
+
+    # Give this datasource a stable UID so dashboard JSON files can
+    # reference it by ID — prevents broken panels after re-imports.
+    uid: prometheus-rag
+
+    access: proxy
+    editable: false  # prevent accidental UI edits overwriting provisioned config

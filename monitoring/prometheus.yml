@@ -1,0 +1,40 @@
+# monitoring/prometheus.yml
+# -------------------------
+# Prometheus scrape configuration for the Agentic RAG Platform.
+#
+# HOW PROMETHEUS WORKS:
+#   Prometheus is a pull-based system — it hits each target's /metrics
+#   endpoint on a fixed interval and stores the result as time series data.
+#   This file tells Prometheus: WHAT to scrape, HOW OFTEN, and WHAT to
+#   call the data in its database.
+
+global:
+  # How often Prometheus scrapes ALL targets by default.
+  # 15s is the production standard — fine-grained enough for alerting,
+  # low enough to not overwhelm targets with requests.
+  scrape_interval: 15s
+
+  # How often Prometheus evaluates alerting rules.
+  evaluation_interval: 15s
+
+scrape_configs:
+
+  # ── Job 1: Agentic RAG FastAPI app ────────────────────────────────────────
+  - job_name: "agentic-rag"
+
+    # Override global interval for this job only — 15s is fine here.
+    scrape_interval: 15s
+
+    static_configs:
+      - targets:
+          # host.docker.internal resolves to the EC2 host machine from inside
+          # the Prometheus Docker container. Never use "localhost" here —
+          # that would point to the container itself, not your FastAPI app.
+          - "host.docker.internal:8000"
+
+        # Labels added to every time series scraped from this target.
+        # Useful for filtering in Grafana when you have multiple environments.
+        labels:
+          env: "production"
+          app: "agentic-rag-platform"
+          team: "ml-platform"
