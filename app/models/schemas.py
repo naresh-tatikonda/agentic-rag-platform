@@ -62,6 +62,18 @@ class QueryResponse(BaseModel):
     retrieval_scores: Optional[List[float]] = Field(
         description="Cosine similarity scores for each retrieved chunk from pgvector"
     )
+    # ── RAGAS eval field ──────────────────────────────────────────────────────
+    # Retrieved chunk texts are returned alongside scores so the RAGAS eval
+    # runner can use the EXACT context the LLM saw — not a re-queried approximation.
+    # Without this, RAGAS context metrics (precision/recall) would be unreliable.
+    # Marked Optional so existing clients don't break if field is absent.
+    retrieved_chunks: List[str] = Field(
+        default=[],
+        description=(
+            "Raw text of each retrieved chunk from pgvector, in score order. "
+            "Used by RAGAS eval runner to score Context Precision and Context Recall."
+        )
+    )
     retry_count: int = Field(
         description="Number of agent retries before final answer was approved"
     )

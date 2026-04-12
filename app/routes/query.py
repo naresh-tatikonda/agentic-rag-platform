@@ -102,6 +102,9 @@ async def run_query(request: QueryRequest):
             intent=result.get("intent"),
             quality_score=result.get("quality_score", 0.0),
             retrieval_scores=result.get("retrieval_scores", []),
+            # Pass exact chunks the LLM used — required for RAGAS eval accuracy.
+            # AgentState.retrieved_chunks is populated by SECRetrieverNode.
+            retrieved_chunks=result.get("retrieved_chunks", []),
             retry_count=result.get("retry_count", 0),
             latency_ms=round(latency_ms, 2),
             timestamp=datetime.now(timezone.utc),
