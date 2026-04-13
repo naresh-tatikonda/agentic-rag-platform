@@ -87,7 +87,7 @@ async def run_query(request: QueryRequest):
             query=request.query,
             ticker=result.get("ticker", request.ticker),
             fiscal_year=result.get("fiscal_year", request.fiscal_year),
-            intent=result.get("intent"),
+            intent=str(result.get("intent") or "unknown"),
             quality_score=result.get("quality_score", 0.0),
             retry_count=result.get("retry_count", 0),
             latency_ms=latency_ms,
