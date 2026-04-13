@@ -1,0 +1,174 @@
+# .github/workflows/ci.yml
+# =============================================================================
+# CI/CD Pipeline — Agentic RAG Platform
+#
+# Trigger: every push to main or PR targeting main
+#
+# Jobs (in order — each blocks the next on failure):
+#   1. test        → pytest unit + integration tests
+#   2. ragas-eval  → RAGAS faithfulness quality gate against live container
+#   3. docker-push → Build & push image to ECR (only if 1 & 2 pass)
+# =============================================================================
+
+name: CI Quality Gate + Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION:     us-east-1
+  ECR_REPOSITORY: agentic-rag-platform
+  IMAGE_TAG:      ${{ github.sha }}
+
+jobs:
+
+  # ── Job 1: Unit + Integration Tests ────────────────────────────────────────
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+
+    services:
+      # Spin up pgvector for integration tests
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER:     user
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB:       ragdb
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pytest
+        env:
+          DATABASE_URL: postgresql://user:${{ secrets.POSTGRES_PASSWORD }}@localhost:5432/ragdb
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          pytest tests/ -v \
+            --tb=short \
+            --junitxml=reports/pytest.xml
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report
+          path: reports/pytest.xml
+
+  # ── Job 2: RAGAS Faithfulness Quality Gate ─────────────────────────────────
+  ragas-eval:
+    name: RAGAS Quality Gate
+    runs-on: ubuntu-latest
+    needs: test          # only runs if pytest passes
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Start full stack via docker compose
+        env:
+          OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          API_KEY:           ${{ secrets.RAG_API_KEY }}
+        run: |
+          docker compose up -d
+          # Wait for /health to return 200 — max 60s
+          echo "Waiting for API to become healthy..."
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health)
+            if [ "$STATUS" = "200" ]; then
+              echo "  ✅ API healthy after ${i}x5s"
+              break
+            fi
+            echo "  ... attempt $i/12 (status=$STATUS)"
+            sleep 5
+          done
+
+      - name: Seed test data into pgvector
+        env:
+          DATABASE_URL: postgresql://user:${{ secrets.POSTGRES_PASSWORD }}@localhost:5432/ragdb
+        run: |
+          # Ingest the same AAPL 2025 10-K fixture used in tests
+          # so the golden questions have real chunks to retrieve
+          python scripts/ingest_fixture.py \
+            --ticker AAPL \
+            --fiscal_year 2025 \
+            --fixture tests/fixtures/aapl_2025_10k_sample.txt
+
+      - name: Run RAGAS faithfulness eval
+        env:
+          API_BASE_URL:                  http://localhost:8000
+          API_KEY:                       ${{ secrets.RAG_API_KEY }}
+          OPENAI_API_KEY:                ${{ secrets.OPENAI_API_KEY }}
+          RAGAS_FAITHFULNESS_THRESHOLD:  "0.7"
+        run: python scripts/ci_ragas_eval.py
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose down -v
+
+  # ── Job 3: Build + Push to ECR ─────────────────────────────────────────────
+  docker-push:
+    name: Build & Push ECR
+    runs-on: ubuntu-latest
+    needs: [test, ragas-eval]   # BOTH must pass — no exceptions
+
+    # Only deploy on direct pushes to main — not on PRs
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build \
+            --tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            --tag $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: Output deployed image URI
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          echo "🚀 Deployed: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"

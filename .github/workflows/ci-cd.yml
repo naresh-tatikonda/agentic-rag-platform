@@ -83,6 +83,7 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
           # Minimum faithfulness score to pass the gate
           RAGAS_FAITHFULNESS_THRESHOLD: "0.7"
 
