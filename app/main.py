@@ -75,7 +75,7 @@ async def metrics():
 @app.get("/health", include_in_schema=False)
 async def health():
     """
-    Kubernetes liveness probe endpoint (used on Day 11 — minikube deploy).
+    Kubernetes liveness probe endpoint (minikube deploy).
     Returns 200 OK when the app is running. No auth required.
     Also serves as the Prometheus 'up' metric target — if this endpoint
     stops responding, Prometheus fires an 'InstanceDown' alert.

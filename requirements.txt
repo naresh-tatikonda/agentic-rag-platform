@@ -147,3 +147,4 @@ yfinance==1.2.0
 zstandard==0.25.0
 gunicorn==21.2.0
 ruff==0.4.0
+mypy==1.10.0
