@@ -1,0 +1,172 @@
+# .github/workflows/ci-cd.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# CI/CD Pipeline for agentic-rag-platform
+# Triggered on every push to main branch
+#
+# Pipeline order (fail fast — cheapest checks first):
+#   Job 1: quality  → lint → typecheck → pytest → ragas eval (quality gate)
+#   Job 2: build    → docker build → push to GitHub Container Registry (GHCR)
+#   Job 3: deploy   → SSH into EC2 → pull new image → restart container
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: CI/CD Pipeline
+
+# Trigger: run this pipeline on every push to main
+# Pull requests to main also trigger quality job only (no deploy)
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 1: Quality Gate
+# Runs on GitHub's free Ubuntu runner
+# All steps must pass before Job 2 (build) is allowed to start
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+  quality:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Check out your repo code onto the GitHub runner
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Install Python 3.12 on the runner
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          # cache: pip tells GitHub to cache downloaded packages
+          # Speeds up subsequent runs significantly
+          cache: "pip"
+
+      # Step 3: Install all dependencies from requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Step 4: Lint with ruff (fastest Python linter, replaces flake8)
+      # Catches syntax errors, unused imports, style violations
+      # Fails the pipeline immediately if any lint errors found
+      - name: Lint with ruff
+        run: ruff check app/ agents/
+
+      # Step 5: Type check with mypy
+      # Catches type mismatches before runtime
+      # --ignore-missing-imports skips third-party stubs we haven't installed
+      - name: Type check with mypy
+        run: mypy app/ agents/ --ignore-missing-imports
+
+      # Step 6: Run unit tests with pytest
+      # -v = verbose output (shows each test name)
+      # --tb=short = short traceback on failure (easier to read in CI logs)
+      - name: Run unit tests
+        run: pytest tests/ -v --tb=short
+        env:
+          # Tests need these env vars — injected from GitHub Secrets
+          # Never hardcoded here — secrets are masked in logs as ***
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      # Step 7: RAGAS Quality Gate
+      # Runs eval against a small fixed golden test set (10-15 questions)
+      # Blocks deployment if faithfulness score drops below 0.7
+      # This prevents hallucinating LLM changes from reaching production
+      - name: RAGAS evaluation quality gate
+        run: python scripts/ci_ragas_eval.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Minimum faithfulness score to pass the gate
+          RAGAS_FAITHFULNESS_THRESHOLD: "0.7"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 2: Build and Push Docker Image
+# Only runs if Job 1 (quality) passes completely
+# Pushes image to GitHub Container Registry (GHCR) — free, no DockerHub needed
+# ─────────────────────────────────────────────────────────────────────────────
+  build:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    # Critical: this job waits for quality job to pass
+    # If quality fails, build never runs — broken code never gets packaged
+    needs: quality
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step: Log in to GitHub Container Registry
+      # GITHUB_TOKEN is automatically provided by GitHub Actions — no setup needed
+      # ghcr.io is free for public repos and included with GitHub accounts
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Step: Build and push the Docker image
+      # Tags the image with two tags:
+      #   1. git SHA (e.g. ghcr.io/user/repo:a1b2c3d) — immutable, traceable
+      #   2. 'latest' — always points to the most recent build
+      # Using git SHA means you can roll back to any exact commit's image
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/${{ github.repository }}:latest
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 3: Deploy to EC2
+# Only runs if Job 2 (build) passes
+# SSHs into your EC2, pulls the new image, restarts the container
+# ─────────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    # Only deploy on push to main — not on pull requests
+    # This prevents feature branches from accidentally deploying
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+
+    steps:
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          # These commands run on your EC2 via SSH
+          script: |
+            # Log in to GHCR on the EC2 to pull private images
+            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io \
+              -u ${{ github.actor }} --password-stdin
+
+            # Pull the exact image built from this commit (not 'latest')
+            # Using git SHA ensures we deploy exactly what was tested
+            docker pull ghcr.io/${{ github.repository }}:${{ github.sha }}
+
+            # Stop and remove the currently running container gracefully
+            docker stop rag-api || true
+            docker rm rag-api || true
+            # '|| true' prevents pipeline failure if container wasn't running
+
+            # Start the new container with the freshly pulled image
+            # --env-file .env injects secrets from EC2's .env file at runtime
+            docker run -d \
+              --name rag-api \
+              -p 8000:8000 \
+              --env-file /home/ubuntu/agentic-rag-platform/.env \
+              --restart unless-stopped \
+              ghcr.io/${{ github.repository }}:${{ github.sha }}
+            # --restart unless-stopped = auto-restart on EC2 reboot or crash
+
+            # Verify the new container started successfully
+            sleep 5
+            docker ps | grep rag-api
