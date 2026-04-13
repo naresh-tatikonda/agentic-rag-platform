@@ -138,8 +138,8 @@ def call_api(case: EvalCase) -> EvalCase:
     }
     payload = {
         "query"      : case.question,
-        "ticker"     : "AAPL",
-        "fiscal_year": 2025,
+        "ticker"     : case.ticker,
+        "fiscal_year": case.fiscal_year,
     }
 
     try:

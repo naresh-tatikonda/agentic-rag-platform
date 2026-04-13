@@ -54,6 +54,8 @@ class EvalCase:
     question     : str
     ground_truth : str
     contexts     : List[str]
+    ticker       : str = "AAPL"
+    fiscal_year  : int = 2025
     answer       : str = ""
 
 

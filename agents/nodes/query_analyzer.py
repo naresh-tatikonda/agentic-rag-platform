@@ -42,24 +42,49 @@ VALID_INTENTS = {
     "general",              # Catch-all for anything else
 }
 
-# ── System prompt ─────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """You are a financial query analyzer. Extract structured information from user queries about SEC filings.
+# ── Ticker + year config — UPDATE THESE when new filings are ingested ─────────
+# To add a new ticker: add entry here + run pipeline.py --ticker X --max_filings N
+# To add a new year:   add to SUPPORTED_YEARS + run pipeline.py --ticker X --fiscal_year Y
+SUPPORTED_TICKERS: dict = {
+    "Apple"    : "AAPL",
+    "Microsoft": "MSFT",
+    "Google"   : "GOOGL",
+    "Alphabet" : "GOOGL",
+    "Amazon"   : "AMZN",
+    "Nvidia"   : "NVDA",
+    "Meta"     : "META",
+}
+
+SUPPORTED_YEARS: list = [2025]   # extend as new fiscal years are ingested
+
+
+def _build_system_prompt() -> str:
+    """Build system prompt dynamically — reflects currently ingested tickers/years."""
+    ticker_map  = ", ".join(f"{k} → {v}" for k, v in SUPPORTED_TICKERS.items())
+    valid_ticks = ", ".join(sorted(set(SUPPORTED_TICKERS.values())))
+    years_list  = ", ".join(str(y) for y in sorted(SUPPORTED_YEARS))
+    return f"""You are a financial query analyzer. Extract structured information from user queries about SEC filings.
 
 Return ONLY a valid JSON object with these fields:
-{
+{{
   "ticker": "<stock ticker symbol in uppercase, or null if not found>",
   "fiscal_year": <4-digit fiscal year as integer, or null if not found>,
   "intent": "<one of: risk_analysis | revenue_summary | business_overview | general>"
-}
+}}
 
 Rules:
-- Convert company names to tickers: Apple → AAPL, Microsoft → MSFT, Google → GOOGL
-- fiscal_year is the year the 10-K COVERS (e.g. FY2023), not the filing date
+- Convert company names to tickers: {ticker_map}
+- Only extract tickers from this supported list: {valid_ticks}
+- fiscal_year is the year the 10-K COVERS, not the filing date
+- Only extract fiscal years from this supported list: {years_list}
 - Convert relative years: "last year" → current year minus 1
-- If no fiscal year is mentioned, set fiscal_year to null.Do NOT guess or default to any year.
+- If no fiscal year is mentioned, set fiscal_year to null. Do NOT guess or default to any year.
+- If ticker or fiscal_year is not in the supported lists, set to null
 - Default intent to "general" if unclear
 - Return ONLY the JSON object, no explanation
 """
+
+SYSTEM_PROMPT = _build_system_prompt()
 
 
 def query_analyzer_node(state: AgentState) -> AgentState:
