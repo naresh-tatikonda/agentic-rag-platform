@@ -73,16 +73,19 @@ def insert_chunks(chunks: List[dict], ticker: str, fiscal_year: int,
 
     # execute_values performs a single multi-row INSERT
     # Much faster than cursor.execute() in a loop
+    # make re-ingestion idempotent
     execute_values(
         cur,
         """
         INSERT INTO sec_filings
             (ticker, fiscal_year, filing_type, filed_date, cik,
-             chunk_index, chunk_text, embedding)
+            chunk_index, chunk_text, embedding)
         VALUES %s
+        ON CONFLICT (ticker, fiscal_year, chunk_index) DO NOTHING
         """,
         rows
     )
+ 
 
     conn.commit()
     inserted = len(rows)
