@@ -19,16 +19,15 @@ SECURITY NOTE ON /metrics:
 
 from dotenv import load_dotenv
 
-# Load .env before any other imports so all env vars (OPENAI_API_KEY,
-# LANGCHAIN_API_KEY, DATABASE_URL, API_KEY) are available at import time.
+# Load .env before any other imports so all env vars are available at import time
 load_dotenv()
 
-from fastapi import FastAPI
-from fastapi.responses import Response
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from fastapi import FastAPI                                        # noqa: E402
+from fastapi.responses import Response                             # noqa: E402
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST # noqa: E402
 
-from app.middleware.auth import APIKeyMiddleware
-from app.routes.query import router as query_router
+from app.middleware.auth import APIKeyMiddleware                   # noqa: E402
+from app.routes.query import router as query_router               # noqa: E402
 
 # ── FastAPI app ──────────────────────────────────────────────────────────────
 app = FastAPI(

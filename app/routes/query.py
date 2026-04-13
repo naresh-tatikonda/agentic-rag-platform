@@ -49,8 +49,7 @@ async def run_query(request: QueryRequest):
     error_message = None
 
     intent = "unknown"   # populated by QueryAnalyzerNode inside the graph
-    status = "error"     # updated to "success" if graph completes cleanly
-
+    
     # Build initial AgentState — only populate input fields here
     # Each agent node populates its own fields as the graph runs
     try:
@@ -113,6 +112,7 @@ async def run_query(request: QueryRequest):
     except Exception as e:                          
         latency_ms = (time.perf_counter() - start_time) * 1000
         error_message = str(e)
+        latency_s = latency_ms / 1000  
 
         # ERROR METRICS — uses defaults from step 1 if graph never ran
         RAG_LATENCY.labels(intent=intent).observe(latency_s)
@@ -124,7 +124,7 @@ async def run_query(request: QueryRequest):
             query=request.query,
             ticker=request.ticker,
             fiscal_year=request.fiscal_year,
-            intent=None,
+            intent=intent or "unknown", # safe fallback
             quality_score=0.0,
             retry_count=0,
             latency_ms=latency_ms,

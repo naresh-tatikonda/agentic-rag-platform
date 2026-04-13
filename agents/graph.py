@@ -28,7 +28,7 @@ Usage:
 """
 
 import logging
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import StateGraph, CompiledStateGraph, START, END
 from agents.state import AgentState
 from agents.nodes.query_analyzer import query_analyzer_node
 from agents.nodes.sec_retriever import sec_retriever_node
@@ -67,7 +67,7 @@ def should_retry(state: AgentState) -> str:
 
 
 # ── Build the graph ───────────────────────────────────────────────────────────
-def build_graph() -> StateGraph:
+def build_graph() -> CompiledStateGraph:
     """
     Constructs and compiles the LangGraph StateGraph.
 

@@ -60,7 +60,8 @@ jobs:
       # Catches type mismatches before runtime
       # --ignore-missing-imports skips third-party stubs we haven't installed
       - name: Type check with mypy
-        run: mypy app/ agents/ --ignore-missing-imports
+        run: mypy app/ agents/
+        # mypy.ini controls all configuration — see root mypy.ini
 
       # Step 6: Run unit tests with pytest
       # -v = verbose output (shows each test name)
