@@ -78,8 +78,12 @@ def market_analyst_node(state: AgentState) -> AgentState:
     query       = state["query"]
     chunks      = state.get("retrieved_chunks") or []
     scores      = state.get("retrieval_scores") or []
-    ticker      = state.get("ticker")           or "AAPL"
-    fiscal_year = state.get("fiscal_year")      or 2023   # Correct fiscal year label
+    ticker      = state.get("ticker")
+    fiscal_year = state.get("fiscal_year")
+
+    if not ticker or not fiscal_year:
+        logger.error("MarketAnalyst: ticker or fiscal_year missing from state")
+        return {"final_answer": "Error: query context missing ticker or fiscal year.", "quality_score": 0.0}
 
     logger.info(f"MarketAnalyst synthesizing answer from {len(chunks)} chunks")
 

@@ -56,7 +56,7 @@ Rules:
 - Convert company names to tickers: Apple → AAPL, Microsoft → MSFT, Google → GOOGL
 - fiscal_year is the year the 10-K COVERS (e.g. FY2023), not the filing date
 - Convert relative years: "last year" → current year minus 1
-- Default fiscal_year to 2023 if no year is mentioned
+- If no fiscal year is mentioned, set fiscal_year to null.Do NOT guess or default to any year.
 - Default intent to "general" if unclear
 - Return ONLY the JSON object, no explanation
 """
@@ -116,6 +116,6 @@ def query_analyzer_node(state: AgentState) -> AgentState:
         logger.warning(f"QueryAnalyzer parse failed: {e}. Using defaults.")
         return {
             "ticker":      None,
-            "fiscal_year": 2023,
+            "fiscal_year": None, # API layer will reject and surface error
             "intent":      "general",
         }

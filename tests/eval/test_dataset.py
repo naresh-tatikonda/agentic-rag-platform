@@ -1,15 +1,15 @@
-# tests/test_dataset.py
+# tests/eval/test_dataset.py
 #
 # PURPOSE: Golden evaluation dataset for the agentic-rag-platform RAGAS eval suite.
 #
-# DATA SOURCE: Apple Inc. Form 10-K FY2023 (EDGAR) — the ONLY ticker/year
+# DATA SOURCE: Apple Inc. Form 10-K FY2025 (EDGAR) — the ONLY ticker/year
 #              currently ingested in the pgvector store.
 #
 # WHY ONLY 3 CASES:
 #   Quality over quantity for a portfolio project. Each case targets a
 #   different RAGAS failure mode:
 #     tc_001 → Faithfulness (will LLM hallucinate a number?)
-#     tc_002 → Context Recall (will retriever find ALL risk sections?)
+#     tc_002 → Context Recall (will retriever find ALL revenue sections?)
 #     tc_003 → Multi-chunk synthesis (hardest — stresses all 4 metrics)
 #
 # ADDING MORE CASES LATER:
@@ -21,6 +21,18 @@
 #   answer       : pipeline response (populated by eval runner, NOT here)
 #   contexts     : retrieved chunks (populated by eval runner, NOT here)
 #   ground_truth : human-written ideal answer (fixed here — never changes)
+#
+# SOURCE NUMBERS — verified from FY2025 10-K retrieved chunks (curl confirmed):
+#   Total net sales:        $416,161M
+#   iPhone:                 $209,586M
+#   Mac:                    $33,708M
+#   iPad:                   $28,023M
+#   Wearables/Home/Acc:     $35,686M
+#   Services:               $109,158M
+#   Total gross margin:     $195,201M / 46.9%
+#   Products gross margin:  36.8%
+#   Services gross margin:  75.4%
+#   R&D:                    $34,550M
 
 from dataclasses import dataclass, field
 from typing import List
@@ -34,18 +46,18 @@ class EvalCase:
     Fields populated HERE (static):
         case_id, difficulty, question, ground_truth, contexts
 
-    Fields populated at EVAL TIME by Module 2 (eval runner):
+    Fields populated at EVAL TIME by eval runner:
         answer  ← comes from live pipeline response
     """
     case_id      : str
     difficulty   : str        # 'easy' | 'medium' | 'hard'
     question     : str
     ground_truth : str
-    contexts     : List[str]  # what a GOOD retriever should return
-    answer       : str = ""   # empty here; filled by eval runner
+    contexts     : List[str]
+    answer       : str = ""
 
 
-# ── Golden Dataset — AAPL FY2023 Only ────────────────────────────────────────
+# ── Golden Dataset — AAPL FY2025 Only ────────────────────────────────────────
 
 EVAL_DATASET: List[EvalCase] = [
 
@@ -54,22 +66,21 @@ EVAL_DATASET: List[EvalCase] = [
         difficulty = "easy",
 
         # Factual single-number lookup — primary RAGAS target: Faithfulness
-        # If LLM returns anything other than $383.3B it is hallucinating
-        # Your pipeline already returned this correctly (quality_score=0.95)
-        question   = "What was Apple's total net revenue in fiscal year 2023?",
+        # If LLM returns anything other than $416.2B it is hallucinating
+        question   = "What was Apple's total net revenue in fiscal year 2025?",
 
         ground_truth = (
-            "Apple's total net revenue for fiscal year 2023 was $383,285 million "
-            "($383.3 billion), a decrease from $394,328 million in fiscal year 2022."
+            "Apple's total net revenue for fiscal year 2025 was $416,161 million "
+            "($416.2 billion), an increase of 6% from $391,035 million in fiscal year 2024."
         ),
 
-        # Single chunk — the revenue table from the 10-K income statement
-        # Context Precision should be 1.0 here (one chunk, fully relevant)
+        # Single chunk — revenue table from FY2025 10-K income statement
         contexts = [
             (
-                "Apple Inc. Form 10-K FY2023 Consolidated Statements of Operations: "
-                "Net sales — Products $298,085M, Services $85,200M, "
-                "Total net sales $383,285M (2023) vs $394,328M (2022) vs $365,817M (2021)."
+                "Apple Inc. Form 10-K FY2025 Products and Services Performance: "
+                "iPhone $209,586M, Mac $33,708M, iPad $28,023M, "
+                "Wearables/Home/Accessories $35,686M, Services $109,158M, "
+                "Total net sales $416,161M (2025) vs $391,035M (2024) vs $383,285M (2023)."
             )
         ],
     ),
@@ -78,34 +89,31 @@ EVAL_DATASET: List[EvalCase] = [
         case_id    = "tc_002",
         difficulty = "medium",
 
-        # Multi-chunk, single-doc — primary RAGAS target: Context Recall
-        # Retriever must find iPhone + Mac + iPad + Wearables + Services chunks
-        # Your pipeline returned all 5 product lines correctly — good signal
-        question   = "What were Apple's revenue figures broken down by product category in FY2023?",
+        # Multi-chunk — primary RAGAS target: Context Recall
+        # Retriever must find all 5 product line chunks
+        question   = "What were Apple's revenue figures broken down by product category in FY2025?",
 
         ground_truth = (
-            "Apple's FY2023 revenue by product category: "
-            "iPhone $200,583M, Mac $29,357M, iPad $28,300M, "
-            "Wearables/Home/Accessories $39,845M, Services $85,200M, "
-            "Total $383,285M."
+            "Apple's FY2025 revenue by product category: "
+            "iPhone $209,586M (+4% YoY), Mac $33,708M (+12% YoY), "
+            "iPad $28,023M (+5% YoY), Wearables/Home/Accessories $35,686M (-4% YoY), "
+            "Services $109,158M (+14% YoY), Total $416,161M (+6% YoY)."
         ),
 
-        # 3 chunks representing different sections of the 10-K product breakdown
-        # Tests whether retriever returns ALL relevant chunks (recall)
-        # AND whether it avoids irrelevant chunks (precision)
         contexts = [
             (
-                "Apple 10-K FY2023 Product Net Sales: iPhone $200,583M (2023) "
-                "vs $205,489M (2022). iPhone represents the largest revenue segment."
+                "Apple 10-K FY2025 iPhone net sales: $209,586M (2025) vs $201,183M (2024). "
+                "iPhone net sales increased due to higher net sales of Pro models."
             ),
             (
-                "Apple 10-K FY2023 Product Net Sales: Mac $29,357M, iPad $28,300M, "
-                "Wearables Home and Accessories $39,845M for fiscal year 2023."
+                "Apple 10-K FY2025 Product Net Sales: Mac $33,708M (+12%), "
+                "iPad $28,023M (+5%), Wearables Home and Accessories $35,686M (-4%) "
+                "for fiscal year 2025."
             ),
             (
-                "Apple 10-K FY2023 Segment Data: Services net sales $85,200M in 2023 "
-                "vs $78,129M in 2022. Services include advertising, AppleCare, "
-                "cloud services, digital content, and payment services."
+                "Apple 10-K FY2025 Services net sales $109,158M (+14%) vs $96,169M (2024). "
+                "Growth driven by higher net sales from advertising, App Store, "
+                "and cloud services."
             ),
         ],
     ),
@@ -114,52 +122,43 @@ EVAL_DATASET: List[EvalCase] = [
         case_id    = "tc_003",
         difficulty = "hard",
 
-        # Multi-chunk synthesis — stresses ALL 4 RAGAS metrics simultaneously
-        # LLM must connect gross margin data WITH strategic narrative
-        # This is the case most likely to expose hallucination or drift
-        question   = (
-            "What drove Apple's gross margin improvement from FY2021 to FY2023, "
+        # Multi-chunk synthesis — primary RAGAS target: all 4 metrics
+        # Tests whether LLM connects gross margin table with Services narrative
+        question = (
+            "What drove Apple's gross margin improvement in FY2025 "
             "and how does this relate to Apple's Services strategy?"
         ),
 
         ground_truth = (
-            "Apple's gross margin improved from 41.8% in FY2021 to 44.1% in FY2023. "
-            "This was primarily driven by the growth of the Services segment, which "
-            "carried a gross margin of approximately 70.8% in FY2023 compared to "
-            "Products gross margin of 36.6%. As Services grew as a proportion of "
-            "total revenue, it structurally lifted the blended gross margin. "
-            "Apple's 10-K explicitly identifies Services growth as a strategic priority."
+            "Apple's total gross margin was 46.9% in FY2025, up from 46.2% in FY2024. "
+            "This improvement was driven by Services segment growth — Services gross "
+            "margin reached 75.4% in FY2025 vs Products at 36.8%, structurally lifting "
+            "the blended rate. Services net sales grew 14% to $109,158M, driven by "
+            "advertising, App Store, and cloud services. The high-margin Services mix "
+            "offset tariff cost pressure on Products gross margin percentage, which "
+            "declined slightly from 37.2% to 36.8% due to tariff costs and product mix."
         ),
 
-        # Two chunk types from different sections of the same 10-K:
-        #   1. Financial data (margin table)
-        #   2. Strategic narrative (MD&A section)
-        # Retriever must find BOTH — tests cross-section recall
         contexts = [
             (
-                "Apple 10-K FY2023 Gross Margin: Total gross margin 44.1% (2023), "
-                "43.3% (2022), 41.8% (2021). Products gross margin 36.6% (2023). "
-                "Services gross margin 70.8% (2023)."
+                "Apple 10-K FY2025 Gross Margin Table: "
+                "Products gross margin $112,887M / 36.8% (2025) vs 37.2% (2024). "
+                "Services gross margin $82,314M / 75.4% (2025) vs 73.9% (2024). "
+                "Total gross margin $195,201M / 46.9% (2025) vs 46.2% (2024)."
             ),
             (
-                "Apple 10-K FY2023 MD&A — Services: Services revenue grew from "
-                "$78,129M in FY2022 to $85,200M in FY2023. Management views Services "
-                "as the highest-margin and fastest-growing segment, central to "
-                "long-term profitability strategy."
+                "Apple 10-K FY2025 Services Gross Margin: increased during 2025 compared "
+                "to 2024 primarily due to higher Services net sales and a different mix "
+                "of services. Services gross margin percentage increased due to a different "
+                "mix of services, partially offset by higher costs."
+            ),
+            (
+                "Apple 10-K FY2025 Products Gross Margin: increased during 2025 compared "
+                "to 2024 primarily due to favorable costs and a different mix of products, "
+                "partially offset by tariff costs. Products gross margin percentage decreased "
+                "due to a different mix of products and tariff costs."
             ),
         ],
     ),
+
 ]
-
-
-# ── Sanity check ──────────────────────────────────────────────────────────────
-# Run directly to verify dataset loads without import errors:
-#   python tests/test_dataset.py
-if __name__ == "__main__":
-    print(f"✅ Loaded {len(EVAL_DATASET)} eval cases\n")
-    for case in EVAL_DATASET:
-        print(
-            f"  [{case.difficulty.upper():6}] {case.case_id} — "
-            f"{case.question[:65]}..."
-        )
-    print("\n⚠️  NOTE: 'answer' fields are empty — populated at eval time by Module 2")

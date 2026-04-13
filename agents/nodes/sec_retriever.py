@@ -85,9 +85,16 @@ def sec_retriever_node(state: AgentState) -> AgentState:
         Partial AgentState update with retrieved_chunks and retrieval_scores
     """
     query       = state["query"]
-    ticker      = state.get("ticker")      or "AAPL"
-    fiscal_year = state.get("fiscal_year") or 2023    # fiscal_year column in DB
+    ticker      = state.get("ticker")      
+    fiscal_year = state.get("fiscal_year")
     intent      = state.get("intent")      or "general"
+
+    if not ticker or not fiscal_year:
+        missing = [k for k, v in {"ticker": ticker, "fiscal_year": fiscal_year}.items() if not v]
+        logger.error(f"SECRetriever: missing required state fields: {missing}")
+        return {"retrieved_chunks": [], "retrieval_scores": [], "error": f"missing_fields:{','.join(missing)}"}
+
+    
 
     logger.info(f"SECRetriever searching ticker={ticker}, fiscal_year={fiscal_year}, intent={intent}")
 

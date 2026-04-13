@@ -27,15 +27,15 @@ class QueryRequest(BaseModel):
             description="Natural language question about SEC filings",
             example="What are the Apple's main risk factors in FY2023"
      )
-    ticker: Optional[str] = Field(
-        default="AAPL",
+    ticker: str = Field(
+        ...,
         description="Stock ticker to scope retrieval. Defaults to AAPL.",
         example="AAPL"
     )
-    fiscal_year: Optional[int] = Field(
-        default=2023,
+    fiscal_year: int = Field(
+        ...,
         description="Fiscal year the 10-K covers. Defaults to 2023.",
-        example=2023
+        example=2025
     )
 
 class QueryResponse(BaseModel):

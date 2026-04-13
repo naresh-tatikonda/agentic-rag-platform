@@ -23,8 +23,8 @@ def get_db_connection():
     )
 
 
-def insert_chunks(chunks: List[dict], ticker: str, filing_type: str,
-                  filed_date: str, cik: str) -> int:
+def insert_chunks(chunks: List[dict], ticker: str, fiscal_year: int,
+                  filing_type: str, filed_date: str, cik: str) -> int:
     """
     Bulk insert embedded chunks into the sec_filings pgvector table.
 
@@ -40,6 +40,8 @@ def insert_chunks(chunks: List[dict], ticker: str, filing_type: str,
     Args:
         chunks:       List of chunk dicts with 'embedding' vectors added
         ticker:       Stock ticker symbol (e.g. 'AAPL')
+        fiscal_year:  Fiscal year the 10-K covers (e.g. 2025) — derived
+                      from EDGAR accession number, never hardcoded
         filing_type:  SEC form type (e.g. '10-K')
         filed_date:   Filing date string (e.g. '2025-10-31')
         cik:          SEC Central Index Key for the company
@@ -60,6 +62,7 @@ def insert_chunks(chunks: List[dict], ticker: str, filing_type: str,
 
         rows.append((
             ticker,
+            fiscal_year,
             filing_type,
             filed_date,
             cik,
@@ -74,7 +77,7 @@ def insert_chunks(chunks: List[dict], ticker: str, filing_type: str,
         cur,
         """
         INSERT INTO sec_filings
-            (ticker, filing_type, filed_date, cik,
+            (ticker, fiscal_year, filing_type, filed_date, cik,
              chunk_index, chunk_text, embedding)
         VALUES %s
         """,
