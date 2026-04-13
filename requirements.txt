@@ -145,3 +145,4 @@ xxhash==3.6.0
 yarl==1.23.0
 yfinance==1.2.0
 zstandard==0.25.0
+gunicorn==21.2.0
