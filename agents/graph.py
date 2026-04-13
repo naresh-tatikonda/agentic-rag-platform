@@ -27,13 +27,21 @@ Usage:
     print(result["final_answer"])
 """
 
+from __future__ import annotations
 import logging
-from langgraph.graph import StateGraph, CompiledStateGraph, START, END
+from typing import TYPE_CHECKING
+
+from langgraph.graph import StateGraph, START, END
 from agents.state import AgentState
 from agents.nodes.query_analyzer import query_analyzer_node
 from agents.nodes.sec_retriever import sec_retriever_node
 from agents.nodes.market_analyst import market_analyst_node
 from agents.nodes.critic import critic_node
+
+# TYPE_CHECKING is False at runtime — this import only runs during mypy checks
+# Avoids ImportError on older LangGraph versions that don't export CompiledStateGraph
+if TYPE_CHECKING:
+    from langgraph.graph.state import CompiledStateGraph
 
 # ── Logger ────────────────────────────────────────────────────────────────────
 logger = logging.getLogger(__name__)
