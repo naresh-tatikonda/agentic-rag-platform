@@ -1,0 +1,47 @@
+# .dockerignore
+# Tells Docker what NOT to copy into the image during `docker build`
+# Think of it exactly like .gitignore — same pattern syntax
+# Goal: keep the image lean and free of secrets
+
+# --- Python runtime artifacts (Docker rebuilds these from requirements.txt) ---
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# --- Secrets — NEVER bake into image ---
+.env
+.env.*
+*.pem
+*.key
+
+# --- Dev tooling — not needed in production image ---
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+
+# --- Ingestion pipeline — runs separately, not part of FastAPI serving ---
+src/ingestion/
+src/eval/
+notebooks/
+
+# --- Git history — bloats the image with no benefit ---
+.git/
+.gitignore
+
+# --- OS + IDE noise ---
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# --- Docker files themselves (don't need to copy into the image) ---
+Dockerfile
+docker-compose.yml
+.dockerignore
