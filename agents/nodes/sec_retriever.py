@@ -89,7 +89,7 @@ def sec_retriever_node(state: AgentState) -> AgentState:
     fiscal_year = state.get("fiscal_year")
     intent      = state.get("intent")      or "general"
 
-    if not ticker or not fiscal_year:
+    if ticker is None or fiscal_year is None:
         missing = [k for k, v in {"ticker": ticker, "fiscal_year": fiscal_year}.items() if not v]
         logger.error(f"SECRetriever: missing required state fields: {missing}")
         return {"retrieved_chunks": [], "retrieval_scores": [], "error": f"missing_fields:{','.join(missing)}"}

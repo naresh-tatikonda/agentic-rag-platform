@@ -81,7 +81,7 @@ def market_analyst_node(state: AgentState) -> AgentState:
     ticker      = state.get("ticker")
     fiscal_year = state.get("fiscal_year")
 
-    if not ticker or not fiscal_year:
+    if ticker is None or fiscal_year is None:
         logger.error("MarketAnalyst: ticker or fiscal_year missing from state")
         return {"final_answer": "Error: query context missing ticker or fiscal year.", "quality_score": 0.0}
 
