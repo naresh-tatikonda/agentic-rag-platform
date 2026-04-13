@@ -8,3 +8,4 @@ __pycache__/
 fix_readme.py
 README.md.save
 .env
+tests/eval/results/
