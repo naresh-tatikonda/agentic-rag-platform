@@ -7,7 +7,7 @@
 # Jobs (in order — each blocks the next on failure):
 #   1. test        → pytest unit + integration tests
 #   2. ragas-eval  → RAGAS faithfulness quality gate against live container
-#   3. docker-push → Build & push image to ECR (only if 1 & 2 pass)
+#   3. docker-push → Build & push image to GHCR (only if 1 & 2 pass)
 # =============================================================================
 
 name: CI Quality Gate + Deploy
@@ -17,11 +17,6 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-
-env:
-  AWS_REGION:     us-east-1
-  ECR_REPOSITORY: agentic-rag-platform
-  IMAGE_TAG:      ${{ github.sha }}
 
 jobs:
 
@@ -77,7 +72,7 @@ jobs:
   ragas-eval:
     name: RAGAS Quality Gate
     runs-on: ubuntu-latest
-    needs: test          # only runs if pytest passes
+    needs: test
 
     steps:
       - uses: actions/checkout@v4
@@ -91,84 +86,104 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Start full stack via docker compose
-        env:
-          OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          API_KEY:           ${{ secrets.RAG_API_KEY }}
+      - name: Create docker network
+        run: docker network create rag-net
+
+      - name: Start pgvector
         run: |
-          docker compose up -d
-          # Wait for /health to return 200 — max 60s
-          echo "Waiting for API to become healthy..."
+          docker run -d \
+            --name ragdb \
+            --network rag-net \
+            -e POSTGRES_USER=user \
+            -e POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }} \
+            -e POSTGRES_DB=ragdb \
+            -p 5432:5432 \
+            pgvector/pgvector:pg16
+          # Wait for postgres to be ready
+          for i in $(seq 1 10); do
+            docker exec ragdb pg_isready -U user && break
+            echo "  waiting for postgres... $i/10"
+            sleep 3
+          done
+
+      - name: Start RAG API
+        run: |
+          docker run -d \
+            --name rag-api \
+            --network rag-net \
+            -e OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
+            -e LANGCHAIN_API_KEY=${{ secrets.LANGCHAIN_API_KEY }} \
+            -e LANGCHAIN_TRACING_V2=true \
+            -e LANGCHAIN_PROJECT=agentic-rag-platform \
+            -e DATABASE_URL=postgresql://user:${{ secrets.POSTGRES_PASSWORD }}@ragdb:5432/ragdb \
+            -e POSTGRES_USER=user \
+            -e POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }} \
+            -e POSTGRES_DB=ragdb \
+            -e POSTGRES_HOST=ragdb \
+            -e POSTGRES_PORT=5432 \
+            -e API_KEY=${{ secrets.RAG_API_KEY }} \
+            -e PORT=8000 \
+            -p 8000:8000 \
+            ghcr.io/naresh-tatikonda/agentic-rag-platform:latest
+
+      - name: Wait for API healthy
+        run: |
           for i in $(seq 1 12); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health)
             if [ "$STATUS" = "200" ]; then
-              echo "  ✅ API healthy after ${i}x5s"
+              echo "✅ API healthy after ${i}x5s"
               break
             fi
-            echo "  ... attempt $i/12 (status=$STATUS)"
+            echo "  attempt $i/12 (status=$STATUS)"
             sleep 5
           done
 
-      - name: Seed test data into pgvector
-        env:
-          DATABASE_URL: postgresql://user:${{ secrets.POSTGRES_PASSWORD }}@localhost:5432/ragdb
-        run: |
-          # Ingest the same AAPL 2025 10-K fixture used in tests
-          # so the golden questions have real chunks to retrieve
-          python scripts/ingest_fixture.py \
-            --ticker AAPL \
-            --fiscal_year 2025 \
-            --fixture tests/fixtures/aapl_2025_10k_sample.txt
-
       - name: Run RAGAS faithfulness eval
         env:
-          API_BASE_URL:                  http://localhost:8000
-          API_KEY:                       ${{ secrets.RAG_API_KEY }}
-          OPENAI_API_KEY:                ${{ secrets.OPENAI_API_KEY }}
-          RAGAS_FAITHFULNESS_THRESHOLD:  "0.7"
+          API_BASE_URL:                 http://localhost:8000
+          API_KEY:                      ${{ secrets.RAG_API_KEY }}
+          OPENAI_API_KEY:               ${{ secrets.OPENAI_API_KEY }}
+          RAGAS_FAITHFULNESS_THRESHOLD: "0.7"
         run: python scripts/ci_ragas_eval.py
 
-      - name: Tear down stack
+      - name: Tear down
         if: always()
-        run: docker compose down -v
-
-  # ── Job 3: Build + Push to ECR ─────────────────────────────────────────────
+        run: |
+          docker stop rag-api ragdb || true
+          docker rm   rag-api ragdb || true
+          docker network rm rag-net  || true
+          
+  # ── Job 3: Build + Push to GHCR ────────────────────────────────────────────
   docker-push:
-    name: Build & Push ECR
+    name: Build & Push GHCR
     runs-on: ubuntu-latest
-    needs: [test, ragas-eval]   # BOTH must pass — no exceptions
+    needs: [test, ragas-eval]
 
-    # Only deploy on direct pushes to main — not on PRs
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: read
+      packages: write      # required to push to GHCR
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ env.AWS_REGION }}
-
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}   # auto-injected — no secret to add
 
       - name: Build, tag, and push image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        run: |
-          docker build \
-            --tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-            --tag $ECR_REGISTRY/$ECR_REPOSITORY:latest \
-            .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/${{ github.repository }}:latest
 
       - name: Output deployed image URI
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          echo "🚀 Deployed: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          echo "🚀 Deployed: ghcr.io/${{ github.repository }}:${{ github.sha }}"
