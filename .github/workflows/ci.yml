@@ -100,9 +100,9 @@ jobs:
             -p 5432:5432 \
             pgvector/pgvector:pg16
           # Wait for postgres to be ready
-          for i in $(seq 1 10); do
-            docker exec ragdb pg_isready -U user && break
-            echo "  waiting for postgres... $i/10"
+          for i in $(seq 1 15); do
+            docker exec ragdb pg_isready -U user -d ragdb && break
+            echo "  waiting for postgres... $i/15"
             sleep 3
           done
 
@@ -128,18 +128,30 @@ jobs:
             -e PORT=8000 \
             -p 8000:8000 \
             rag-api-ci:latest
+      - name: Debug — show container status and logs
+        if: always()
+        run: |
+          echo "=== Container status ==="
+          docker ps -a
+          echo "=== rag-api logs ==="
+          docker logs rag-api --tail 50
+          echo "=== ragdb logs ==="
+          docker logs ragdb --tail 20  
 
       - name: Wait for API healthy
         run: |
-          for i in $(seq 1 12); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health)
+          for i in $(seq 1 24); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health 2>/dev/null || echo "000")
             if [ "$STATUS" = "200" ]; then
               echo "✅ API healthy after ${i}x5s"
-              break
+              exit 0
             fi
-            echo "  attempt $i/12 (status=$STATUS)"
+            echo "  attempt $i/24 (status=$STATUS)"
             sleep 5
           done
+          echo "❌ API never became healthy"
+          docker logs rag-api --tail 30
+          exit 1
 
       - name: Run RAGAS faithfulness eval
         env:
