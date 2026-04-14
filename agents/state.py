@@ -21,7 +21,7 @@ Schema note:
 """
 
 from typing_extensions import TypedDict
-from typing import Optional, List
+from typing import Optional, List, Annotated
 
 def keep_last(existing, new):
     """Reducer: keep new value if set, otherwise keep existing."""
