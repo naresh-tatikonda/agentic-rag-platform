@@ -234,3 +234,32 @@ jobs:
       - name: Output deployed image URI
         run: |
           echo "🚀 Deployed: ghcr.io/${{ github.repository }}:${{ github.sha }}"
+
+    
+  # ── Job 4: Deploy to EC2 ────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: [docker-push]                          # only runs if image push succeeded
+
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: SSH into EC2 and deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/agentic-rag-platform
+
+            # Mirror main — never edit files directly on EC2
+            git fetch origin main
+            git reset --hard origin/main
+
+            # Pull ONLY the updated app image from GHCR (pgvector untouched)
+            docker pull ghcr.io/${{ github.repository }}:latest
+
+            # Restart only containers whose image changed
+            docker compose up -d --remove-orphans
