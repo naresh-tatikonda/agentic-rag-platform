@@ -25,6 +25,9 @@ import json
 import requests
 from datasets import Dataset
 from ragas import evaluate
+from ragas.llms import LangchainLLMWrapper
+from langchain_openai import ChatOpenAI
+import statistics
 from ragas.metrics import faithfulness
 import statistics
 
