@@ -121,7 +121,7 @@ def query_analyzer_node(state: AgentState) -> AgentState:
 
         # ── Validate and sanitize extracted fields ────────────────────────────
         ticker      = extracted.get("ticker")
-        fiscal_year = extracted.get("fiscal_year")
+        fiscal_year = extracted.get("fiscal_year") or state.get("fiscal_year")  # ← ADD fallback
         intent      = extracted.get("intent", "general")
 
         # Ensure intent is one of the supported values
@@ -131,7 +131,7 @@ def query_analyzer_node(state: AgentState) -> AgentState:
         logger.info(f"QueryAnalyzer extracted → ticker={ticker}, fiscal_year={fiscal_year}, intent={intent}")
 
         return {
-            "ticker":      ticker,
+            "ticker":      ticker or state.get("ticker"),
             "fiscal_year": fiscal_year,
             "intent":      intent,
         }
