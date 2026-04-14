@@ -255,8 +255,8 @@ jobs:
             cd ~/agentic-rag-platform
 
             # Mirror main — never edit files directly on EC2
-            git fetch origin main
-            git reset --hard origin/main
+            git pull origin main
+            #git reset --hard origin/main
 
             # Pull ONLY the updated app image from GHCR (pgvector untouched)
             docker pull ghcr.io/${{ github.repository }}:latest

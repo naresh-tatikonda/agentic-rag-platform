@@ -1,0 +1,35 @@
+services:
+
+  rag-api:
+    image: agentic-rag-platform:latest
+    container_name: rag-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - ragdb
+    networks:
+      - rag-network
+
+  ragdb:
+    image: pgvector/pgvector:pg16
+    container_name: ragdb
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    env_file:
+      - .env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - rag-network
+
+networks:
+  rag-network:
+    driver: bridge
+
+volumes:
+  pgdata:
+    external: true    # ← uses existing volume, does NOT wipe your data
