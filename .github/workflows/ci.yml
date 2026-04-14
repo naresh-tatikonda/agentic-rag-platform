@@ -106,6 +106,9 @@ jobs:
             sleep 3
           done
 
+      - name: Build RAG API image from source
+        run: docker build -t rag-api-ci:latest .
+
       - name: Start RAG API
         run: |
           docker run -d \
@@ -124,7 +127,7 @@ jobs:
             -e API_KEY=${{ secrets.RAG_API_KEY }} \
             -e PORT=8000 \
             -p 8000:8000 \
-            ghcr.io/naresh-tatikonda/agentic-rag-platform:latest
+            rag-api-ci:latest
 
       - name: Wait for API healthy
         run: |
@@ -152,7 +155,7 @@ jobs:
           docker stop rag-api ragdb || true
           docker rm   rag-api ragdb || true
           docker network rm rag-net  || true
-          
+
   # ── Job 3: Build + Push to GHCR ────────────────────────────────────────────
   docker-push:
     name: Build & Push GHCR
