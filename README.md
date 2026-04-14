@@ -178,6 +178,5 @@ API_KEY=
 ## Author
 
 **Naresh Tatikonda**
-
 🔗 [LinkedIn](https://www.linkedin.com/in/nareshtatikonda)  
 🔗 [GitHub](https://github.com/naresh-tatikonda)
