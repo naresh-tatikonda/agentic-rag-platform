@@ -83,7 +83,12 @@ def market_analyst_node(state: AgentState) -> AgentState:
 
     if ticker is None or fiscal_year is None:
         logger.error("MarketAnalyst: ticker or fiscal_year missing from state")
-        return {"final_answer": "Error: query context missing ticker or fiscal year.", "quality_score": 0.0}
+        return {
+            "final_answer": "Error: query context missing ticker or fiscal year.",
+            "quality_score": 0.0,
+            "fiscal_year": state.get("fiscal_year"),
+            "ticker": state.get("ticker"),
+        }
 
     logger.info(f"MarketAnalyst synthesizing answer from {len(chunks)} chunks")
 
@@ -94,7 +99,9 @@ def market_analyst_node(state: AgentState) -> AgentState:
             "draft_answer": (
                 f"I could not find relevant information about {ticker} "
                 f"in the FY{fiscal_year} SEC filing to answer your question."
-            )
+            ),
+            "fiscal_year": fiscal_year,
+            "ticker": ticker,
         }
 
     # ── Format context from retrieved chunks ──────────────────────────────────
@@ -119,7 +126,11 @@ Please provide a comprehensive answer based on the above SEC filing excerpts."""
         draft_answer = response.content.strip()
         logger.info(f"MarketAnalyst generated answer ({len(draft_answer)} chars)")
 
-        return {"draft_answer": draft_answer}
+        return {
+            "draft_answer": draft_answer,
+            "fiscal_year": fiscal_year,
+            "ticker": ticker,
+        }
 
     except Exception as e:
         logger.error(f"MarketAnalyst failed: {e}")

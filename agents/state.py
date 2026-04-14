@@ -23,6 +23,9 @@ Schema note:
 from typing_extensions import TypedDict
 from typing import Optional, List
 
+def keep_last(existing, new):
+    """Reducer: keep new value if set, otherwise keep existing."""
+    return new if new is not None else existing
 
 class AgentState(TypedDict):
     """
@@ -35,21 +38,21 @@ class AgentState(TypedDict):
     query: str                          # Raw user question e.g. "What are AAPL risks in 2023?"
 
     # ── Query Analysis (populated by QueryAnalyzerNode) ──────────────────
-    ticker: Optional[str]               # Extracted stock ticker e.g. "AAPL"
-    fiscal_year: Optional[int]          # Fiscal year the 10-K covers e.g. 2023
+    ticker: Annotated[Optional[str], keep_last]              # Extracted stock ticker e.g. "AAPL"
+    fiscal_year: Annotated[Optional[int], keep_last]          # Fiscal year the 10-K covers e.g. 2023
                                         # Distinct from filed_date in DB
-    intent: Optional[str]               # Classified intent: "risk_analysis" |
+    intent: Annotated[Optional[str], keep_last]               # Classified intent: "risk_analysis" |
                                         # "revenue_summary" | "business_overview" | "general"
 
     # ── Retrieval (populated by SECRetrieverNode) ─────────────────────────
-    retrieved_chunks: Optional[List[str]]     # Top-k text chunks from pgvector
-    retrieval_scores: Optional[List[float]]   # Similarity scores for each chunk
+    retrieved_chunks: list     # Top-k text chunks from pgvector
+    retrieval_scores: list   # Similarity scores for each chunk
 
     # ── Generation (populated by MarketAnalystNode) ───────────────────────
-    draft_answer: Optional[str]         # LLM-generated answer before quality check
+    draft_answer: Annotated[Optional[str], keep_last]         # LLM-generated answer before quality check
 
     # ── Critic / Quality Gate (populated by CriticNode) ───────────────────
-    quality_score: Optional[float]      # Score 0.0–1.0 (threshold: 0.7 to pass)
-    retry_count: int                    # Tracks retries to prevent infinite loops
+    quality_score: Annotated[Optional[float], keep_last]      # Score 0.0–1.0 (threshold: 0.7 to pass)
+    retry_count: Annotated[Optional[int], keep_last]                    # Tracks retries to prevent infinite loops
                                         # Max retries = 2 (defined in graph.py)
-    final_answer: Optional[str]         # Approved answer returned to user
+    final_answer: Annotated[Optional[str], keep_last]         # Approved answer returned to user

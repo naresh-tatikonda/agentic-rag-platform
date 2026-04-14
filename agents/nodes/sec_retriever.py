@@ -153,4 +153,9 @@ def sec_retriever_node(state: AgentState) -> AgentState:
 
     except Exception as e:
         logger.error(f"SECRetriever failed: {e}")
-        return {"retrieved_chunks": [], "retrieval_scores": []}
+        return {
+            "retrieved_chunks": [],
+            "retrieval_scores": [],
+            "fiscal_year": state.get("fiscal_year"),
+            "ticker": state.get("ticker"),
+        }
