@@ -26,6 +26,7 @@ import requests
 from datasets import Dataset
 from ragas import evaluate
 from ragas.metrics import faithfulness
+import statistics
 
 
 # ── Configuration — all values injected from GitHub Secrets at CI runtime ────
@@ -156,9 +157,12 @@ def main() -> None:
 
     # Step 3: Score with RAGAS faithfulness
     print(f"\nScoring {len(dataset)} responses with RAGAS faithfulness...")
+    ragas_llm = LangchainLLMWrapper(ChatOpenAI(model="gpt-4o-mini", max_tokens=2000, temperature=0))
+    faithfulness.llm = ragas_llm
     results = evaluate(dataset, metrics=[faithfulness])
 
-    score = results["faithfulness"]
+    raw = results["faithfulness"]
+    score = statistics.mean(raw) if isinstance(raw, list) else float(raw)
     print(f"\n{'='*60}")
     print(f"Faithfulness score: {score:.3f}")
     print(f"Threshold:          {THRESHOLD}")
