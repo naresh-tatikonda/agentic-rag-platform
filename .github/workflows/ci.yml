@@ -107,7 +107,23 @@ jobs:
           done
 
       - name: Build RAG API image from source
-        run: docker build -t rag-api-ci:latest .
+        run: docker build --no-cache -t rag-api-ci:latest .
+
+      - name: Seed AAPL 2025 fixture data
+        run: |
+          # Copy CSV into the ragdb container
+          docker cp tests/fixtures/aapl_2025_sample.csv ragdb:/tmp/aapl_2025_sample.csv
+
+          # Run seed.sql (creates table + indexes)
+          docker cp tests/fixtures/seed.sql ragdb:/tmp/seed.sql
+          docker exec ragdb psql -U user -d ragdb -f /tmp/seed.sql
+
+          # Load CSV via COPY
+          docker exec ragdb psql -U user -d ragdb -c "\COPY sec_filings (ticker, filing_type, filed_date, cik, chunk_index, chunk_text, embedding, fiscal_year) FROM '/tmp/aapl_2025_sample.csv' WITH (FORMAT csv, HEADER true);"
+
+          # Verify
+          docker exec ragdb psql -U user -d ragdb \
+            -c "SELECT COUNT(*) as chunks FROM sec_filings WHERE ticker='AAPL' AND fiscal_year=2025;"
 
       - name: Start RAG API
         run: |
@@ -152,6 +168,16 @@ jobs:
           echo "❌ API never became healthy"
           docker logs rag-api --tail 30
           exit 1
+      
+      - name: Debug — test query endpoint
+        run: |
+          curl -s -X POST http://localhost:8000/query \
+            -H "Content-Type: application/json" \
+            -H "X-API-Key: ${{ secrets.RAG_API_KEY }}" \
+            -d '{"query": "test", "ticker": "AAPL", "fiscal_year": 2025}' \
+            | python3 -m json.tool || true
+          echo "=== rag-api logs (last 50) ==="
+          docker logs rag-api --tail 50
 
       - name: Run RAGAS faithfulness eval
         env:
