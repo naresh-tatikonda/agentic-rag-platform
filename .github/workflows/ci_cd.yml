@@ -256,8 +256,7 @@ jobs:
 
             # Mirror main — never edit files directly on EC2
             git pull origin main
-            #git reset --hard origin/main
-
+            
             # Pull ONLY the updated app image from GHCR (pgvector untouched)
             docker pull ghcr.io/${{ github.repository }}:latest
 

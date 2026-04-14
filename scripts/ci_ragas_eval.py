@@ -27,9 +27,10 @@ from datasets import Dataset
 from ragas import evaluate
 from ragas.llms import LangchainLLMWrapper
 from langchain_openai import ChatOpenAI
-import statistics
 from ragas.metrics import faithfulness
+
 import statistics
+import math
 
 
 # ── Configuration — all values injected from GitHub Secrets at CI runtime ────
@@ -160,12 +161,23 @@ def main() -> None:
 
     # Step 3: Score with RAGAS faithfulness
     print(f"\nScoring {len(dataset)} responses with RAGAS faithfulness...")
-    ragas_llm = LangchainLLMWrapper(ChatOpenAI(model="gpt-4o-mini", max_tokens=2000, temperature=0))
+    ragas_llm = LangchainLLMWrapper(ChatOpenAI(model="gpt-4o-mini", max_tokens=4096, temperature=0))
     faithfulness.llm = ragas_llm
     results = evaluate(dataset, metrics=[faithfulness])
 
     raw = results["faithfulness"]
     score = statistics.mean(raw) if isinstance(raw, list) else float(raw)
+    # ── nan guard ────────────────────────────────────────────────
+    if math.isnan(score):
+        print(f"\n{'='*60}")
+        print("⚠️  Faithfulness score is nan")
+        print("Cause: LLM hit max_tokens limit on one or more items")
+        print("Fix:   max_tokens already increased to 4096")
+        print("❌ FAILED — nan score, cannot gate deployment")
+        print("=" * 60)
+        sys.exit(1)
+    # ─────────────────────────────────────────────────────────────
+    
     print(f"\n{'='*60}")
     print(f"Faithfulness score: {score:.3f}")
     print(f"Threshold:          {THRESHOLD}")
