@@ -269,5 +269,8 @@ jobs:
             # Pull ONLY the updated app image from GHCR (pgvector untouched)
             docker pull ghcr.io/${{ github.repository }}:latest
 
+            # force-recreate instead of plain up -d
+            docker compose up -d --force-recreate rag-api
+
             # Restart only containers whose image changed
             docker compose up -d --remove-orphans
