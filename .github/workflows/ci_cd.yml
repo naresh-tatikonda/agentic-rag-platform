@@ -15,8 +15,16 @@ name: CI Quality Gate + Deploy
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'          # README, any markdown doc
+      - '.gitignore'
+      - 'monitoring/**'  # Grafana/Prometheus config only
+      - 'docs/**'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
 
 jobs:
 
