@@ -12,7 +12,15 @@ Production-grade Retrieval-Augmented Generation system that answers natural lang
 **Example query:**
 > "What are Apple's top 3 risk factors for fiscal year 2025 and how did revenue trend?"
 
-The system retrieves relevant 10-K chunks using hybrid search, passes them to a multi-agent LangGraph orchestrator, cross-references live market data from Yahoo Finance, scores confidence, and returns a cited, auditable answer.
+The system retrieves relevant 10-K chunks using hybrid search, passes them to a multi-agent LangGraph orchestrator, optionally cross-references live market data from Yahoo Finance (planned), scores confidence, and returns a cited, auditable answer.
+
+## Business Framing
+
+**Problem.** Teams are deploying RAG assistants over sensitive financial and enterprise data, but most of these systems are operated with minimal observability, weak regression testing, and ad‑hoc deployment practices. That leads to silent regressions, inconsistent answer quality, and expensive incidents whenever prompts, models, or data drift.
+
+**Users and impact.** The primary user is the ML platform / MLOps engineer responsible for keeping an LLM assistant over SEC EDGAR filings reliable and cost‑efficient. They need a way to see how retrieval and answer quality evolve over time, detect data and schema drift before it impacts analysts, and gate deployments so only “healthy” versions of the assistant reach production.
+
+**Solution.** FinSight AI wraps an EDGAR-focused RAG pipeline (downloader → parser → chunker → embedder → pgvector + BM25 hybrid retrieval → LangGraph multi‑agent orchestrator → FastAPI API) with CI/CD and observability. The architecture is designed to integrate quality gates (RAG evaluation), dashboards, and future extensions like autoscaling, cost‑aware routing, caching, and drift monitoring so that operating the assistant looks like operating any other critical service: observable, testable, and safe to iterate on.
 
 ---
 
@@ -51,6 +59,7 @@ Observability Stack
 CI/CD Pipeline (GitHub Actions)
     └── RAGAS Faithfulness Gate (threshold ≥ 0.7) → GHCR → EC2 Deploy
 ```
+> Note: Components marked `[planned]` are architectural extensions, not implemented in the current version.
 
 ---
 
@@ -76,7 +85,7 @@ SSH Deploy → EC2
 ```
 
 - Feature branch pushes run **lint (ruff + mypy) + pytest only** — no RAGAS eval, no deploy
-- Full pipeline fires **only on `main` merges** — intentional, not on every commit
+- Full pipeline fires **only on `main` merges that change code or workflow files** — README/docs‑only changes (`*.md`, `docs/**`, `.gitignore`) are skipped via `paths-ignore`.
 - Failed RAGAS gate blocks deployment — EC2 keeps running last good image
 
 ---
@@ -88,9 +97,9 @@ SSH Deploy → EC2
 | Vector Index | HNSW (pgvector) | Sub-millisecond ANN at 1M+ vectors |
 | Lexical Search | GIN + ts_rank | BM25-equivalent, no extra extension needed |
 | Agent Framework | LangGraph | Stateful graph execution, production-proven |
-| LLM Routing | GPT-4o-mini → GPT-4o | Cost control: simple queries use mini |
+| LLM Routing (planned) | GPT-4o-mini → GPT-4o | Cost control: simple queries use mini |
 | Evaluation | RAGAS Faithfulness | Industry standard RAG eval framework |
-| Drift Detection | Evidently | Embedding distribution shift monitoring |
+| Drift Detection (planned) | Evidently | Embedding distribution shift monitoring |
 | Container Registry | GHCR | Native GitHub integration, free for public repos |
 
 ---
@@ -147,7 +156,7 @@ Planned production enhancements in priority order:
 | LLM | OpenAI GPT-4o / GPT-4o-mini |
 | Serving | FastAPI, Gunicorn |
 | Observability | LangSmith, Prometheus, Grafana |
-| Evaluation | RAGAS, Evidently |
+| Evaluation | RAGAS, Evidently (planned) |
 | Deployment | Docker Compose, EC2 |
 | CI/CD | GitHub Actions |
 
