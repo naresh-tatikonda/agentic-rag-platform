@@ -16,15 +16,19 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      - '**.md'          # README, any markdown doc
+      - 'README.md'
+      - '**/*.md'
       - '.gitignore'
-      - 'monitoring/**'  # Grafana/Prometheus config only
+      - 'monitoring/**'
       - 'docs/**'
   pull_request:
     branches: [main]
     paths-ignore:
-      - '**.md'
+      - 'README.md'
+      - '**/*.md'
       - '.gitignore'
+      - 'monitoring/**'
+      - 'docs/**'
 
 jobs:
 
