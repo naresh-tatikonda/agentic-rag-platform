@@ -106,9 +106,7 @@ SSH Deploy → EC2
 
 ## Failure Modes & Mitigations
 
-Every production failure should have a defined response. This table covers
-the critical failure surface of FinSight AI — from ingestion through serving —
-and clearly separates what is implemented today vs. planned.
+Every production system will fail in specific, repeatable ways. This table makes those failure modes explicit across ingestion, retrieval, orchestration, and serving, and documents how the current version of FinSight AI detects and mitigates each one. The roadmap below then focuses on features that improve reliability, visibility, and recovery beyond this baseline.
 
 | # | Failure | Cause | Detection | Mitigation | Status |
 |---|--------|-------|-----------|------------|--------|
@@ -119,31 +117,28 @@ and clearly separates what is implemented today vs. planned.
 | 5 | **LangGraph node exception** | OpenAI AuthenticationError, timeout, or node logic error | Exception bubbles out of `graph.invoke()` | FastAPI route wraps `graph.invoke()` in try/except; logs error and returns a clean HTTP 500 with a user-friendly “please try again” message. | Implemented |
 | 6 | **Critic node infinite loop** | Confidence never reaches 0.7 and loop has no guard | Would show as long-running / hung request | Critic node enforces a hard max of 2 rewrite attempts; after that it exits with a safe “I do not have the answer” response. | Implemented |
 | 7 | **OpenAI API timeout / rate limit** | High concurrency or upstream degradation | Timeout / HTTP 429 exception from client | Error propagates to FastAPI layer, which catches it at graph invocation and returns “please try again”; traceback is available in logs for debugging. | Implemented |
-| 8 | **RAGAS CI gate failure** | Real quality regression or test-set variance | CI run shows faithfulness < 0.7 for the 3-question suite | Deployment is blocked; engineer inspects traces and fixes regression or, if flaky, adjusts tests before re-running CI. | Implemented |
+| 8 | **RAGAS CI gate failure** | Real quality regression or test-set variance | CI run shows faithfulness < 0.7 for the 10-question suite | Deployment is blocked; engineer inspects traces and fixes regression or, if flaky, adjusts tests before re-running CI. | Implemented |
 | 9 | **pgvector slow ANN query** | Missing index or suboptimal HNSW parameters | Observed as high latency during queries / local profiling | Ensure HNSW index is built at ingestion; tune parameters if latency becomes an issue. | Planned (baseline index is present; tuning & alerts planned) |
 | 10 | **Docker container crash on EC2** | OOM, bad deploy, or dependency failure | `docker ps` shows container exited; GitHub Actions deploy step fails | `docker compose up -d` can roll back to last good image; failed deploy leaves previous version running. | Implemented (manual monitoring; Prometheus alerting planned) |
 | 11 | **Bad API key in production** | Expired or wrong `OPENAI_API_KEY` / `LANGCHAIN_API_KEY` in `.env` | 401 AuthenticationError like the one seen in CI logs | CI fails early; keys get fixed before deployment. Startup-time env validation is planned so bad keys never reach users. | Partially implemented |
 
 ---
-## Roadmap (Tiered for L5 Interview Signal)
+## Roadmap
 
-Planned production enhancements in priority order:
+Planned production enhancements, ordered by impact on reliability, quality, and operations.
 
-| Tier | # | Feature | Why It Matters for L5 |
-|------|---|---------|------------------------|
-| 1 | 1 | **Failure Modes Table** | Makes production risks (timeouts, retrieval miss, API failures, bad keys, drift) explicit and shows SRE-style thinking instead of “happy path only.” |
-| 1 | 2 | **Business Framing** | Reframes the project as a financial analyst copilot (risk and earnings workflows) rather than just “a RAG app,” which is what recruiters and hiring managers actually hire for. |
-| 1 | 3 | **Page-Level Citations in Answers** | Every answer points to the exact 10-K page, which is critical for SEC-grade auditability and a strong UX talking point (schema + metadata + UI). |
-| 1 | 4 | **Scaling Strategy Design Doc** | Documents how this architecture evolves to 10M docs / 1K QPS (pgvector sharding, async ingestion, horizontal FastAPI), which is a core L5 system-design question. |
-| 1 | 5 | **Baseline vs Agentic RAGAS Comparison** | Shows, with numbers, how much the agentic LangGraph flow improves over a naive RAG baseline on faithfulness and context recall, using the RAGAS gate already in CI. |
-| 2 | 6 | **Caching Layer (Redis / in-memory)** | Simple query/embedding cache to cut latency and OpenAI cost; demonstrates practical performance and cost optimization in production. |
-| 2 | 7 | **Cost-Aware LLM Router** | Routes easy queries to GPT-4o-mini and hard/low-confidence ones to GPT-4o, creating an explicit quality vs latency vs cost trade-off story. |
-| 2 | 8 | **Cross-Encoder Re-Ranker** | Fixes known retrieval noise by reranking top-k chunks, improving context precision and RAGAS scores without needing any heavy model training. |
-| 2 | 9 | **Yahoo Finance API Integration** | Completes the Market Analyst Agent and introduces a real external API dependency (timeouts, rate limits, stale data) to talk about retries and circuit breakers. |
-| 3 | 10 | **Adaptive Retrieval Node** | Adds dynamic behavior (skip retrieval, multi-hop, re-query) based on Critic confidence; higher complexity, so kept as a design + thin implementation if time permits. |
-| 3 | 11 | **Evidently Drift Monitoring** | Uses a saved RAGAS/embedding baseline to detect behavioral drift over time and alert before users complain — a strong MLOps/observability story. |
-| 3 | 12 | **Kubernetes + HPA** | Runs FastAPI + pgvector on Kubernetes with basic HPA, enough to discuss container orchestration and autoscaling without over-building microservices. |
-
+| Tier | # | Feature | Impact |
+|------|---|---------|--------|
+| 1 | 1 | **Page-Level Citations in Answers** | Make every answer point to the exact 10‑K page/section used, improving analyst trust, auditability, and ease of manual verification. |
+| 1 | 2 | **Baseline vs Agentic RAGAS Comparison** | Quantifies how much the LangGraph agentic flow improves over a naive RAG baseline on faithfulness and context recall, grounding future changes in numbers rather than intuition. |
+| 1 | 3 | **Caching Layer (Redis / in-memory)** | Reduces latency and OpenAI spend by caching frequent queries and embeddings, keeping the system responsive under load while controlling cost. |
+| 1 | 4 | **Cost-Aware LLM Router** | Routes straightforward queries to GPT‑4o‑mini and complex/low‑confidence ones to GPT‑4o, making the quality vs latency vs cost trade‑off explicit and tunable. |
+| 2 | 5 | **Cross-Encoder Re-Ranker** | Reranks the top‑k retrieved chunks to improve context precision, reducing irrelevant context and improving answer quality without retraining large models. |
+| 2 | 6 | **Yahoo Finance API Integration** | Completes the Market Analyst agent by enriching answers with live market data, introducing real external‑API concerns (timeouts, rate limits, stale data). |
+| 2 | 7 | **Adaptive Retrieval Node** | Adjusts retrieval behavior (e.g., re‑query, multi‑hop, or skip) based on critic confidence, improving robustness on ambiguous or underspecified questions. |
+| 3 | 8 | **Evidently Drift Monitoring** | Monitors embedding and feature distributions over time, alerting when the data or usage pattern drifts so ingestion, indexing, or prompts can be updated proactively. |
+| 3 | 9 | **Kubernetes + HPA** | Runs FastAPI and pgvector on Kubernetes with basic Horizontal Pod Autoscaling, allowing the service to scale with traffic and making deployment closer to typical production stacks. |
+| 3 | 10 | **Scaling Strategy Design Doc** | Captures how this architecture would evolve to support larger corpora and higher QPS (sharding, async ingestion, horizontal scaling), providing a blueprint for future growth. |
 ---
 
 ## Tech Stack
