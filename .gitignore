@@ -9,3 +9,6 @@ fix_readme.py
 README.md.save
 .env
 tests/eval/results/
+
+.claude/settings.local.json
+CLAUDE.md
