@@ -1,161 +1,144 @@
 """
 agents/nodes/sec_retriever.py
 ------------------------------
-SECRetriever Node — second node in the LangGraph pipeline.
+SECRetriever Node — second node in the LangGraph pipeline (route == "sec").
 
 Responsibility:
-    Uses ticker, fiscal_year, and intent from AgentState to retrieve
-    the most relevant chunks from pgvector using hybrid search:
-    - HNSW vector search  : semantic similarity (dense retrieval)
-    - BM25 / GIN index    : keyword match (sparse retrieval)
+    For each ticker in AgentState.tickers, embeds the query and runs pgvector
+    HNSW cosine search scoped to that ticker + fiscal_year, returning a wide
+    candidate set per ticker for the Reranker node to narrow down.
 
-Why hybrid search?
-    - Pure vector search misses exact keyword matches (e.g. "revenue $394B")
-    - Pure BM25 misses semantic matches (e.g. "sales" vs "revenue")
-    - Hybrid = best of both worlds — higher recall, better precision
+    Current retrieval is vector-only (cosine similarity via pgvector <=>).
+    There is no lexical/BM25 stage yet — the GIN index in the schema exists
+    but nothing here queries it. Hybrid search is tracked as future work,
+    not implemented in this pass.
+
+    Retrieving wide (CANDIDATE_POOL_SIZE) instead of a tight top-k matters
+    because reranking can only reorder what's in the candidate set — it
+    can't recover a chunk that vector search didn't surface at all.
 
 Table schema (sec_filings):
     id, ticker, filing_type, filed_date, cik,
     chunk_index, chunk_text, embedding, created_at, fiscal_year
 
 Output:
-    Updates AgentState with: retrieved_chunks, retrieval_scores
+    Updates AgentState with: retrieved_chunks (list[dict], see agents/state.py),
+    retrieval_scores (mirrors vector_score, pre-rerank)
 """
 
 import logging
 import os
+
 import psycopg2
 from openai import OpenAI
+
 from agents.state import AgentState
 
-# ── Logger ────────────────────────────────────────────────────────────────────
 logger = logging.getLogger(__name__)
 
-# ── OpenAI client for generating query embeddings ─────────────────────────────
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# ── Retrieval config ──────────────────────────────────────────────────────────
-TOP_K = 5
+CANDIDATE_POOL_SIZE = 30      # per-ticker candidates handed to the Reranker
 EMBEDDING_MODEL = "text-embedding-3-small"   # Must match ingestion model
 
-# ── Intent → keyword boost mapping ───────────────────────────────────────────
-# Appending intent keywords improves vector search relevance for specific intents
+# -- Intent -> keyword boost mapping ------------------------------------------
 INTENT_KEYWORDS = {
-    "risk_analysis":     "risk factors threats litigation regulatory",
-    "revenue_summary":   "revenue earnings net income financial results",
+    "risk_analysis": "risk factors threats litigation regulatory",
+    "revenue_summary": "revenue earnings net income financial results",
     "business_overview": "business segments products services operations",
-    "general":           "",
+    "comparison": "",
+    "general": "",
 }
 
 
 def get_db_connection():
-    """
-    Create a fresh PostgreSQL connection per node invocation.
-    Avoids stale connection issues across multiple graph runs.
-    """
+    """Create a fresh PostgreSQL connection per node invocation."""
     return psycopg2.connect(os.getenv("DATABASE_URL"))
 
 
 def embed_query(text: str) -> list[float]:
-    """
-    Generate embedding vector for the query using OpenAI.
-    Must use same model as ingestion (text-embedding-3-small = 1536 dims).
-    """
-    response = openai_client.embeddings.create(
-        model=EMBEDDING_MODEL,
-        input=text,
-    )
+    """Generate embedding vector for the query. Must match ingestion model (1536 dims)."""
+    response = openai_client.embeddings.create(model=EMBEDDING_MODEL, input=text)
     return response.data[0].embedding
+
+
+def _search_ticker(cur, ticker: str, fiscal_year: int, embedding_str: str) -> list[dict]:
+    """Run the per-ticker vector search and shape rows into the chunk-dict contract."""
+    sql = """
+        SELECT
+            id,
+            chunk_text,
+            1 - (embedding <=> %s::vector) AS similarity_score
+        FROM sec_filings
+        WHERE ticker = %s AND fiscal_year = %s
+        ORDER BY embedding <=> %s::vector
+        LIMIT %s;
+    """
+    cur.execute(sql, (embedding_str, ticker, fiscal_year, embedding_str, CANDIDATE_POOL_SIZE))
+    rows = cur.fetchall()
+
+    if not rows:
+        logger.warning(f"No chunks found for ticker={ticker}, fiscal_year={fiscal_year}")
+        return []
+
+    return [
+        {
+            "chunk_id": f"{ticker}:{row_id}",
+            "ticker": ticker,
+            "text": chunk_text,
+            "vector_score": float(score),
+            "rerank_score": None,
+        }
+        for row_id, chunk_text, score in rows
+    ]
 
 
 def sec_retriever_node(state: AgentState) -> AgentState:
     """
-    LangGraph node function — retrieves relevant SEC filing chunks from pgvector.
-
-    Hybrid search strategy:
-        1. Embed the query using OpenAI text-embedding-3-small
-        2. Run HNSW vector search (cosine similarity via pgvector <=> operator)
-        3. Filter by ticker and fiscal_year column (not filed_date)
-        4. Return top-k chunks with similarity scores
+    LangGraph node function — retrieves a wide per-ticker candidate pool from pgvector.
 
     Args:
-        state: Current AgentState with ticker, fiscal_year, intent populated
+        state: Current AgentState with tickers, fiscal_year, intent populated
 
     Returns:
         Partial AgentState update with retrieved_chunks and retrieval_scores
     """
-    query       = state["query"]
-    ticker      = state.get("ticker")      
+    query = state["query"]
+    tickers = state.get("tickers") or []
     fiscal_year = state.get("fiscal_year")
-    intent      = state.get("intent")      or "general"
+    intent = state.get("intent") or "general"
 
-    if ticker is None or fiscal_year is None:
-        missing = [k for k, v in {"ticker": ticker, "fiscal_year": fiscal_year}.items() if not v]
-        logger.error(f"SECRetriever: missing required state fields: {missing}")
-        return {"retrieved_chunks": [], "retrieval_scores": [], "error": f"missing_fields:{','.join(missing)}"}
+    if not tickers or fiscal_year is None:
+        logger.error(f"SECRetriever: missing tickers or fiscal_year (tickers={tickers}, fiscal_year={fiscal_year})")
+        return {"retrieved_chunks": [], "retrieval_scores": []}
 
-    
+    logger.info(f"SECRetriever searching tickers={tickers}, fiscal_year={fiscal_year}, intent={intent}")
 
-    logger.info(f"SECRetriever searching ticker={ticker}, fiscal_year={fiscal_year}, intent={intent}")
-
-    # ── Enrich query with intent-specific keywords for better recall ──────────
-    keyword_boost  = INTENT_KEYWORDS.get(intent, "")
+    keyword_boost = INTENT_KEYWORDS.get(intent, "")
     enriched_query = f"{query} {keyword_boost}".strip()
 
     try:
-        # ── Generate query embedding ──────────────────────────────────────────
         query_embedding = embed_query(enriched_query)
-        embedding_str   = "[" + ",".join(map(str, query_embedding)) + "]"
+        embedding_str = "[" + ",".join(map(str, query_embedding)) + "]"
 
         conn = get_db_connection()
-        cur  = conn.cursor()
+        cur = conn.cursor()
 
-        # ── Hybrid search query ───────────────────────────────────────────────
-        # Filters by ticker and fiscal_year column (correctly set during ingestion fix)
-        # Orders by cosine distance (HNSW index via <=> operator)
-        sql = """
-            SELECT
-                chunk_text,
-                1 - (embedding <=> %s::vector) AS similarity_score
-            FROM sec_filings
-            WHERE
-                ticker = %s
-                AND fiscal_year = %s
-            ORDER BY embedding <=> %s::vector
-            LIMIT %s;
-        """
+        all_chunks: list[dict] = []
+        for ticker in tickers:
+            all_chunks.extend(_search_ticker(cur, ticker, fiscal_year, embedding_str))
 
-        cur.execute(sql, (
-            embedding_str,   # For similarity score calculation
-            ticker,          # Filter by stock ticker
-            fiscal_year,     # Filter by fiscal year (not filed_date)
-            embedding_str,   # For ORDER BY cosine distance
-            TOP_K,
-        ))
-
-        rows = cur.fetchall()
         cur.close()
         conn.close()
 
-        if not rows:
-            logger.warning(f"No chunks found for ticker={ticker}, fiscal_year={fiscal_year}")
-            return {"retrieved_chunks": [], "retrieval_scores": []}
-
-        chunks = [row[0] for row in rows]
-        scores = [float(row[1]) for row in rows]
-
-        logger.info(f"SECRetriever retrieved {len(chunks)} chunks, top score={scores[0]:.3f}")
+        if all_chunks:
+            logger.info(f"SECRetriever retrieved {len(all_chunks)} candidate chunks across {len(tickers)} ticker(s)")
 
         return {
-            "retrieved_chunks": chunks,
-            "retrieval_scores": scores,
+            "retrieved_chunks": all_chunks,
+            "retrieval_scores": [c["vector_score"] for c in all_chunks],
         }
 
     except Exception as e:
         logger.error(f"SECRetriever failed: {e}")
-        return {
-            "retrieved_chunks": [],
-            "retrieval_scores": [],
-            "fiscal_year": state.get("fiscal_year"),
-            "ticker": state.get("ticker"),
-        }
+        return {"retrieved_chunks": [], "retrieval_scores": []}

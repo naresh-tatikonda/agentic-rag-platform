@@ -1,131 +1,194 @@
 """
 agents/nodes/critic.py
 -----------------------
-Critic Node — fourth and final node in the LangGraph pipeline.
+Critic Node — fifth and final node in the LangGraph pipeline (route == "sec").
 
 Responsibility:
-    Evaluates the draft answer produced by MarketAnalyst and decides:
-    - PASS  : quality_score >= 0.7 → set final_answer, route to END
-    - RETRY : quality_score <  0.7 → increment retry_count, route back to SECRetriever
+    Grounds each claim from MarketAnalyst against the chunk it cited, then
+    decides:
+      - PASS    : quality_score >= threshold -> final_answer built from the
+                  GROUNDED claims only (ungrounded ones are dropped, not shipped)
+      - RETRY   : quality_score < threshold, retries remain -> loop back to
+                  SECRetriever
+      - ABSTAIN : quality_score < threshold, retries exhausted -> honest
+                  "insufficient evidence" message, never the raw draft
 
-Why a Critic node?
-    Without a quality gate, bad answers (hallucinations, vague responses,
-    insufficient context) reach the user silently. The Critic enforces
-    a minimum quality bar and triggers self-correction automatically.
+    This is a deliberate behavior change from a prior version of this node,
+    which accepted the best available draft once retries ran out regardless
+    of score. For a financial-answers system, shipping a low-confidence
+    guess is worse than saying "I don't know" — so retries-exhausted now
+    routes to abstain, not to a forced pass.
 
-Max retries = 2 to prevent infinite loops. After 2 retries, the best
-available draft is accepted regardless of score.
+Why a deterministic grounding check instead of asking an LLM "is this
+grounded?"
+    An LLM checking its own sibling call's output for hallucination is a
+    weak self-critique pattern — it can rubber-stamp a fabricated number
+    with the same confidence it fabricated it. The grounding check here is
+    a plain string/number match: every numeric token in a claim (dollar
+    amounts, percentages, years) must literally appear in the chunk it
+    cites. Cheap, can't itself hallucinate, and it's exactly the failure
+    mode that matters most for financial data — invented numbers.
+    Known limitation: a claim with no numeric content that's simply
+    off-topic isn't caught by this check alone; that's covered by the
+    relevance/completeness LLM score below, not by groundedness. A full
+    NLI/entailment check on non-numeric claims is a natural next step,
+    not built here to avoid an extra LLM call per claim.
+
+Fail-closed:
+    If the relevance/completeness LLM call errors or times out, quality_score
+    is computed from groundedness ALONE (down-weighted, never inflated) —
+    a broken scorer can only push the outcome toward retry/abstain, never
+    toward a pass it didn't earn.
 
 Output:
-    Updates AgentState with: quality_score, final_answer
+    Updates AgentState with: quality_score, ungrounded_claims, final_answer,
+    and (on abstain) route
 """
 
-import json
 import logging
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage
+import os
+import re
+
+import instructor
+from openai import OpenAI
+from pydantic import BaseModel, Field
+
 from agents.state import AgentState
 
-# ── Logger ────────────────────────────────────────────────────────────────────
 logger = logging.getLogger(__name__)
 
-# ── LLM client — gpt-4o-mini sufficient for scoring tasks ────────────────────
-llm = ChatOpenAI(
-    model="gpt-4o-mini",
-    temperature=0,       # Fully deterministic scoring
-    max_tokens=150,      # Only needs a short JSON score response
-)
+# 20s timeout bounds the critic's own LLM call — a hung scoring call must
+# not hang the whole request; it fails closed into the except branch below.
+client = instructor.from_openai(OpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout=20.0))
 
-# ── Quality threshold and retry limit ─────────────────────────────────────────
-QUALITY_THRESHOLD = 0.7   # Answers scoring below this trigger a retry
-MAX_RETRIES       = 2     # Safety valve — prevents infinite retry loops
+QUALITY_THRESHOLD = 0.7
+MAX_RETRIES = 2
 
-# ── Scoring prompt ────────────────────────────────────────────────────────────
+GROUNDEDNESS_WEIGHT = 0.6
+RELEVANCE_WEIGHT = 0.25
+COMPLETENESS_WEIGHT = 0.15
+
+_NUMERIC_TOKEN_RE = re.compile(r"[-+]?\$?\d[\d,]*\.?\d*%?")
+
+
+class QualityAssessment(BaseModel):
+    relevance: float = Field(ge=0.0, le=1.0, description="Does the answer address the question asked?")
+    completeness: float = Field(ge=0.0, le=1.0, description="Does it cover the main aspects of the question?")
+    reasoning: str = Field(description="One sentence explaining the scores")
+
+
 SYSTEM_PROMPT = """You are a financial answer quality evaluator.
-
-Score the answer on these 4 dimensions (each 0.0-1.0):
-1. relevance    : Does it directly answer the question asked?
-2. specificity  : Does it cite specific facts, numbers, or dates from the filing?
-3. completeness : Does it cover the main aspects of the question?
-4. groundedness : Is it based on the provided context (not hallucinated)?
-
-Return ONLY a valid JSON object:
-{
-  "relevance": <float>,
-  "specificity": <float>,
-  "completeness": <float>,
-  "groundedness": <float>,
-  "overall": <float>,
-  "reasoning": "<one sentence explaining the score>"
-}
-
-The overall score should reflect the weighted average, with groundedness weighted highest.
+Score ONLY relevance and completeness — groundedness is checked separately, do not consider it.
+relevance: does the answer directly address the question asked?
+completeness: does it cover the main aspects of the question?
 """
+
+
+def _extract_numeric_tokens(text: str) -> set[str]:
+    return {t.replace(",", "").replace("$", "").replace("%", "").strip() for t in _NUMERIC_TOKEN_RE.findall(text)}
+
+
+def is_claim_grounded(claim_text: str, source_text: str | None) -> bool:
+    """Pure function — every numeric token in the claim must appear in its cited source text."""
+    if not source_text:
+        return False
+    claim_numbers = _extract_numeric_tokens(claim_text)
+    if not claim_numbers:
+        return True   # no checkable numeric content — see module docstring limitation
+    return claim_numbers.issubset(_extract_numeric_tokens(source_text))
+
+
+def grade_claims(claims: list[dict], chunks_by_id: dict[str, dict]) -> tuple[float, list[dict], list[dict]]:
+    """
+    Pure function — no I/O. Returns (grounded_fraction, grounded_claims, ungrounded_claims).
+    """
+    if not claims:
+        return 0.0, [], []
+
+    grounded, ungrounded = [], []
+    for claim in claims:
+        chunk = chunks_by_id.get(claim["source_chunk_id"])
+        source_text = chunk["text"] if chunk else None
+        if is_claim_grounded(claim["text"], source_text):
+            grounded.append(claim)
+        else:
+            ungrounded.append({**claim, "grounded": False})
+
+    return len(grounded) / len(claims), grounded, ungrounded
+
+
+def compute_quality_score(grounded_fraction: float, relevance: float, completeness: float) -> float:
+    """Pure function. Groundedness weighted highest — see module docstring."""
+    return GROUNDEDNESS_WEIGHT * grounded_fraction + RELEVANCE_WEIGHT * relevance + COMPLETENESS_WEIGHT * completeness
+
+
+def decide_outcome(quality_score: float, retry_count: int) -> str:
+    """Pure function. Returns 'pass' | 'retry' | 'abstain'."""
+    if quality_score >= QUALITY_THRESHOLD:
+        return "pass"
+    if retry_count < MAX_RETRIES:
+        return "retry"
+    return "abstain"
+
+
+def _build_abstain_message(state: AgentState) -> str:
+    tickers = state.get("tickers") or []
+    fiscal_year = state.get("fiscal_year")
+    return (
+        f"I don't have enough grounded evidence in the FY{fiscal_year} SEC filing(s) for "
+        f"{', '.join(tickers) or 'the requested company'} to answer this confidently."
+    )
 
 
 def critic_node(state: AgentState) -> AgentState:
     """
-    LangGraph node function — scores draft answer and sets final_answer if quality passes.
-
-    Routing logic (defined in graph.py via conditional edge):
-        quality_score >= 0.7 OR retry_count >= MAX_RETRIES → END
-        quality_score <  0.7 AND retry_count < MAX_RETRIES → SECRetriever (retry)
-
-    Args:
-        state: Current AgentState with draft_answer populated
-
-    Returns:
-        Partial AgentState update with quality_score and final_answer
+    LangGraph node function — grades claims, decides pass/retry/abstain.
     """
-    query        = state["query"]
-    draft_answer = state.get("draft_answer") or ""
-    retry_count  = state.get("retry_count")  or 0
+    query = state["query"]
+    claims = state.get("draft_claims") or []
+    chunks_by_id = {c["chunk_id"]: c for c in state.get("retrieved_chunks") or []}
+    retry_count = state.get("retry_count") or 0
 
-    logger.info(f"Critic evaluating answer (retry_count={retry_count})")
+    grounded_fraction, grounded_claims, ungrounded_claims = grade_claims(claims, chunks_by_id)
 
     try:
-        # ── Ask LLM to score the draft answer ─────────────────────────────────
-        response = llm.invoke([
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=f"Question: {query}\n\nAnswer to evaluate:\n{draft_answer}"),
-        ])
+        assessment = client.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=0,
+            max_retries=1,
+            response_model=QualityAssessment,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": f"Question: {query}\n\nAnswer to evaluate:\n{state.get('draft_answer') or ''}"},
+            ],
+        )
+        quality_score = compute_quality_score(grounded_fraction, assessment.relevance, assessment.completeness)
+    except Exception as e:
+        logger.warning(f"Critic quality-assessment call failed: {e}. Scoring on groundedness alone (fail closed).")
+        quality_score = GROUNDEDNESS_WEIGHT * grounded_fraction
 
-        # ── Parse scoring response ────────────────────────────────────────────
-        raw = response.content.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
+    outcome = decide_outcome(quality_score, retry_count)
+    logger.info(
+        f"Critic: quality_score={quality_score:.2f} (grounded={grounded_fraction:.2f}), "
+        f"outcome={outcome}, retry_count={retry_count}"
+    )
 
-        scores        = json.loads(raw)
-        quality_score = float(scores.get("overall", 0.5))
-        reasoning     = scores.get("reasoning", "")
+    if outcome == "pass":
+        final_answer = " ".join(c["text"] for c in grounded_claims)
+        return {"quality_score": quality_score, "ungrounded_claims": ungrounded_claims, "final_answer": final_answer}
 
-        logger.info(f"Critic scored: {quality_score:.2f} — {reasoning}")
-
-        # ── Quality gate decision ─────────────────────────────────────────────
-        if quality_score >= QUALITY_THRESHOLD or retry_count >= MAX_RETRIES:
-            # PASS — accept draft as final answer
-            if retry_count >= MAX_RETRIES:
-                logger.warning(f"Max retries reached ({MAX_RETRIES}). Accepting best draft.")
-            return {
-                "quality_score": quality_score,
-                "final_answer":  draft_answer,   # Promote draft to final
-            }
-        else:
-            # RETRY — signal graph to loop back to SECRetriever
-            logger.info(f"Quality below threshold ({quality_score:.2f} < {QUALITY_THRESHOLD}). Retrying.")
-            return {
-                "quality_score": quality_score,
-                "retry_count":   retry_count + 1,
-                "final_answer":  None,            # Keep None to signal retry needed
-            }
-
-    except (json.JSONDecodeError, KeyError, ValueError) as e:
-        # ── Fallback — accept draft on scoring failure ────────────────────────
-        logger.warning(f"Critic scoring failed: {e}. Accepting draft as final.")
+    if outcome == "retry":
         return {
-            "quality_score": 0.5,
-            "final_answer":  draft_answer,
+            "quality_score": quality_score,
+            "ungrounded_claims": ungrounded_claims,
+            "retry_count": retry_count + 1,
+            "final_answer": None,
         }
+
+    # abstain — retries exhausted, still below threshold
+    return {
+        "quality_score": quality_score,
+        "ungrounded_claims": ungrounded_claims,
+        "final_answer": _build_abstain_message(state),
+        "route": "abstain",
+    }
