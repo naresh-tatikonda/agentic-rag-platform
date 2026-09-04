@@ -18,6 +18,7 @@ This makes it trivial to grep, filter, and build dashboards on top of.
 
 import logging
 import json
+from typing import Optional
 from datetime import datetime, timezone
 
 
@@ -73,7 +74,7 @@ def log_query_request(
     logger: logging.Logger,
     query: str,
     ticker: str,
-    fiscal_year: int,
+    fiscal_year: Optional[int],
     intent: str,
     quality_score: float,
     retry_count: int,

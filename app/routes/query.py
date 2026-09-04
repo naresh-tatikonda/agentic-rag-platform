@@ -37,11 +37,11 @@ logger = get_logger("query")
 @router.post("/query", response_model=QueryResponse, tags=["RAG"])
 async def run_query(request: QueryRequest):
     """
-    Runs the full 4-node LangGraph pipeline:
-    QueryAnalyzer → SECRetriever → MarketAnalyst → Critic
+    Runs the LangGraph pipeline:
+    QueryAnalyzer → [SECRetriever → Reranker → MarketAnalyst → Critic] or [Abstain]
 
-    If Critic quality_score < 0.7, graph retries up to MAX_RETRIES=2.
-    Returns final approved answer with full quality metadata.
+    If Critic quality_score < 0.7, graph retries up to MAX_RETRIES=2, then abstains.
+    Returns final answer (or abstention message) with full quality metadata.
     """
 
     # Capture start time before graph runs — used to compute latency
@@ -49,19 +49,22 @@ async def run_query(request: QueryRequest):
     error_message = None
 
     intent = "unknown"   # populated by QueryAnalyzerNode inside the graph
-    
+
+    # `tickers` takes precedence; `ticker` is a single-value override kept for
+    # backward compatibility with existing callers (e.g. the RAGAS eval runner).
+    requested_tickers = request.tickers or ([request.ticker] if request.ticker else None)
+
     # Build initial AgentState — only populate input fields here
     # Each agent node populates its own fields as the graph runs
     try:
         initial_state = {
             "query": request.query,
-            "ticker": request.ticker,
+            "tickers": requested_tickers,
             "fiscal_year": request.fiscal_year,
             "retry_count": 0,          # always start at 0
         }
 
-        # Invoke compiled LangGraph graph — this runs all 4 nodes sequentially
-        # with conditional retry edge from Critic back to SECRetriever
+        # Invoke compiled LangGraph graph
         result = compiled_graph.invoke(initial_state)
 
         # Calculate total end-to-end latency in milliseconds
@@ -81,38 +84,43 @@ async def run_query(request: QueryRequest):
         RAG_REQUESTS_TOTAL.labels(intent=intent, status="success").inc()
 
 
+        result_tickers = result.get("tickers") or requested_tickers or []
+
         # Log successful request
         log_query_request(
             logger=logger,
             query=request.query,
-            ticker=result.get("ticker", request.ticker),
+            ticker=",".join(result_tickers),
             fiscal_year=result.get("fiscal_year", request.fiscal_year),
             intent=str(result.get("intent") or "unknown"),
             quality_score=result.get("quality_score", 0.0),
             retry_count=result.get("retry_count", 0),
             latency_ms=latency_ms,
-        )    
+        )
 
         # Map AgentState output fields to QueryResponse Pydantic model
+        retrieved_chunks = result.get("retrieved_chunks") or []
         return QueryResponse(
             final_answer=result.get("final_answer", "No answer generated"),
-            ticker=result.get("ticker", request.ticker),
+            tickers=result_tickers,
             fiscal_year=result.get("fiscal_year", request.fiscal_year),
             intent=result.get("intent"),
+            route=result.get("route"),
             quality_score=result.get("quality_score", 0.0),
+            ungrounded_claims=result.get("ungrounded_claims") or [],
             retrieval_scores=result.get("retrieval_scores", []),
-            # Pass exact chunks the LLM used — required for RAGAS eval accuracy.
-            # AgentState.retrieved_chunks is populated by SECRetrieverNode.
-            retrieved_chunks=result.get("retrieved_chunks", []),
+            # Pass exact chunk text the LLM used — required for RAGAS eval accuracy.
+            # retrieved_chunks in state is list[dict]; the API contract stays list[str].
+            retrieved_chunks=[c["text"] for c in retrieved_chunks],
             retry_count=result.get("retry_count", 0),
             latency_ms=round(latency_ms, 2),
             timestamp=datetime.now(timezone.utc),
         )
 
-    except Exception as e:                          
+    except Exception as e:
         latency_ms = (time.perf_counter() - start_time) * 1000
         error_message = str(e)
-        latency_s = latency_ms / 1000  
+        latency_s = latency_ms / 1000
 
         # ERROR METRICS — uses defaults from step 1 if graph never ran
         RAG_LATENCY.labels(intent=intent).observe(latency_s)
@@ -122,7 +130,7 @@ async def run_query(request: QueryRequest):
         log_query_request(
             logger=logger,
             query=request.query,
-            ticker=request.ticker,
+            ticker=",".join(requested_tickers or []),
             fiscal_year=request.fiscal_year,
             intent=intent or "unknown", # safe fallback
             quality_score=0.0,

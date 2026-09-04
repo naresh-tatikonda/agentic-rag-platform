@@ -19,22 +19,29 @@ from datetime import datetime
 class QueryRequest(BaseModel):
     """
     Incoming request for body Post /query.
-    Only 3 fields needed - the agent extracts everything else from the question.
+    Only `query` is required — QueryAnalyzer extracts tickers/fiscal_year/intent
+    from natural language. `ticker`/`tickers`/`fiscal_year` are optional overrides
+    for callers (e.g. the RAGAS eval runner) that already know the scope.
     """
 
     query: str = Field(
             ...,
             description="Natural language question about SEC filings",
-            example="What are the Apple's main risk factors in FY2023"
+            example="Compare AMD and AVGO's main risk factors in FY2025"
      )
-    ticker: str = Field(
-        ...,
-        description="Stock ticker to scope retrieval. Defaults to AAPL.",
+    ticker: Optional[str] = Field(
+        default=None,
+        description="Single-ticker override, kept for backward compatibility. Prefer `tickers`.",
         example="AAPL"
     )
-    fiscal_year: int = Field(
-        ...,
-        description="Fiscal year the 10-K covers. Defaults to 2023.",
+    tickers: Optional[List[str]] = Field(
+        default=None,
+        description="Multi-ticker override, e.g. for a comparison query.",
+        example=["AMD", "AVGO"]
+    )
+    fiscal_year: Optional[int] = Field(
+        default=None,
+        description="Fiscal year the 10-K covers. Left unset, QueryAnalyzer defaults to the most recently ingested year.",
         example=2025
     )
 
@@ -45,32 +52,39 @@ class QueryResponse(BaseModel):
     Every field maps to a field written by a specific agent node in AgentState.
     """
     final_answer: str = Field(
-            description="Approved answer from MarketAnalyst, passed by critic quality gate"
+            description="Grounded answer from MarketAnalyst's claims that passed the critic's quality gate, or an abstention message"
     )
-    ticker: str = Field(
-            description="Ticker used for retrieval scoping"
+    tickers: List[str] = Field(
+            default=[],
+            description="Tickers used for retrieval scoping, as resolved by QueryAnalyzer"
     )
-    fiscal_year: int = Field(
+    fiscal_year: Optional[int] = Field(
             description="Fiscal year used for retrieval scoping"
     )
     intent: Optional[str] = Field(
             description="Query intent extracted by QueryAnalyzer e.g. risk_analysis"
     )
+    route: Optional[str] = Field(
+            description="'sec' if answered from filings, 'abstain' if the query was out of scope or evidence was insufficient"
+    )
     quality_score: float = Field(
-            description="Critic quality score 0.0-1.0. Must exceed 0.7 to return answer."
+            description="Critic quality score 0.0-1.0, weighted toward groundedness. Must exceed 0.7 to pass without retry."
+    )
+    ungrounded_claims: List[dict] = Field(
+        default=[],
+        description="Claims MarketAnalyst drafted that failed the critic's grounding check and were dropped from final_answer"
     )
     retrieval_scores: Optional[List[float]] = Field(
-        description="Cosine similarity scores for each retrieved chunk from pgvector"
+        description="Rerank scores for each retrieved chunk (vector-similarity scores if reranking fell back)"
     )
     # ── RAGAS eval field ──────────────────────────────────────────────────────
     # Retrieved chunk texts are returned alongside scores so the RAGAS eval
     # runner can use the EXACT context the LLM saw — not a re-queried approximation.
     # Without this, RAGAS context metrics (precision/recall) would be unreliable.
-    # Marked Optional so existing clients don't break if field is absent.
     retrieved_chunks: List[str] = Field(
         default=[],
         description=(
-            "Raw text of each retrieved chunk from pgvector, in score order. "
+            "Raw text of each retrieved chunk, in score order. "
             "Used by RAGAS eval runner to score Context Precision and Context Recall."
         )
     )
