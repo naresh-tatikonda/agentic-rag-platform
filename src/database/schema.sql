@@ -5,13 +5,15 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS sec_filings (
     id          SERIAL PRIMARY KEY,
     ticker      VARCHAR(10) NOT NULL,
+    fiscal_year INTEGER NOT NULL,
     filing_type VARCHAR(20) NOT NULL,
     filed_date  DATE,
     cik         VARCHAR(20),
     chunk_index INTEGER,
     chunk_text  TEXT NOT NULL,
     embedding   vector(1536),
-    created_at  TIMESTAMP DEFAULT NOW()
+    created_at  TIMESTAMP DEFAULT NOW(),
+    UNIQUE (ticker, fiscal_year, chunk_index)
 );
 
 -- HNSW index for fast ANN search

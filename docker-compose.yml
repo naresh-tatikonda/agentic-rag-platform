@@ -8,6 +8,14 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    # .env's DATABASE_URL/POSTGRES_HOST point at localhost — correct for
+    # running the app directly on the host, but "localhost" inside this
+    # container refers to the container itself, not the ragdb container.
+    # Override to the compose service name, which Docker's internal DNS
+    # resolves to ragdb's container IP on rag-network.
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@ragdb:5432/${POSTGRES_DB}
+      POSTGRES_HOST: ragdb
     depends_on:
       - ragdb
     networks:

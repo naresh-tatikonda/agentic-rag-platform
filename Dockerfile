@@ -34,7 +34,14 @@ WORKDIR /app
 # and skips reinstalling all packages — saves 2-3 minutes on every build
 # where only app code changed
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# The reranker (sentence-transformers) pulls in torch as a transitive
+# dependency. Installed via the default PyPI index, torch drags in the full
+# CUDA toolkit as separate nvidia-* wheels (~9GB) even though this image
+# only ever runs the cross-encoder on CPU — there's no GPU here or on
+# Railway/EKS. Installing the CPU-only build first satisfies torch's
+# requirement before the CUDA-bundled variant ever gets a chance to.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir -r requirements.txt
 # --no-cache-dir tells pip not to store download cache inside the image
 # keeps the image smaller
 
