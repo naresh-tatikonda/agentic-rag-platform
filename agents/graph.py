@@ -14,9 +14,9 @@ Graph topology:
       +-- route == "sec" ------> sec_retriever   -- per-ticker candidate pool (pgvector)
                                      |
                                      v
-                                  reranker        -- cross-encoder, top-k per ticker
-                                     |
-                                     v
+                                  reranker        -- narrow to top-k per ticker;
+                                     |               vector score (default) or
+                                     v               cross-encoder if RERANK_ENABLED
                                   market_analyst  -- GPT-4o, synthesizes sourced claims
                                      |
                                      v

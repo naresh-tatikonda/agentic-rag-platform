@@ -1,10 +1,13 @@
 # tests/agents/test_reranker.py
 #
-# Tests `select_top_k_per_ticker` — the pure grouping/trimming function.
-# No model load needed: the cross-encoder scores are passed in directly,
-# same as `rerank_node` would produce them.
+# Tests `select_top_k_per_ticker` — the pure grouping/trimming function —
+# and the RERANK_ENABLED flag gate. No model load needed: the cross-encoder
+# scores are passed in directly, same as `rerank_node` would produce them,
+# and the default (flag off) path never touches sentence-transformers.
 
-from agents.nodes.reranker import select_top_k_per_ticker
+import pytest
+
+from agents.nodes.reranker import select_top_k_per_ticker, rerank_enabled, rerank_node
 
 
 def _chunk(ticker, chunk_id):
@@ -44,3 +47,30 @@ def test_rerank_score_is_attached_to_kept_chunks():
     kept = select_top_k_per_ticker(chunks, scores, k=5)
 
     assert kept[0]["rerank_score"] == 0.77
+
+
+# -- RERANK_ENABLED flag gate ------------------------------------------------
+
+def test_rerank_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("RERANK_ENABLED", raising=False)
+    assert rerank_enabled() is False
+
+
+@pytest.mark.parametrize("val", ["true", "1", "yes", "on", "TRUE", " On "])
+def test_rerank_flag_truthy_values(monkeypatch, val):
+    monkeypatch.setenv("RERANK_ENABLED", val)
+    assert rerank_enabled() is True
+
+
+def test_rerank_node_baseline_narrows_by_vector_score_without_loading_model(monkeypatch):
+    # Flag off: must narrow purely on vector_score and never import the
+    # cross-encoder. If it tried, this would raise (sentence-transformers
+    # isn't a test dependency).
+    monkeypatch.delenv("RERANK_ENABLED", raising=False)
+    chunks = [
+        {"chunk_id": "AAPL:0", "ticker": "AAPL", "text": "a", "vector_score": 0.2, "rerank_score": None},
+        {"chunk_id": "AAPL:1", "ticker": "AAPL", "text": "b", "vector_score": 0.9, "rerank_score": None},
+    ]
+    out = rerank_node({"query": "q", "retrieved_chunks": chunks})
+    assert [c["chunk_id"] for c in out["retrieved_chunks"]] == ["AAPL:1", "AAPL:0"]
+    assert out["retrieval_scores"] == [0.9, 0.2]
