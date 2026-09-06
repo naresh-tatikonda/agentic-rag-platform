@@ -73,7 +73,7 @@ SUPPORTED_TICKERS: dict = {
 SUPPORTED_TICKER_VALUES = set(SUPPORTED_TICKERS.values())
 # Fiscal years present in the corpus. Extend as new filings are ingested —
 # a ticker/year not listed here routes to abstain rather than a bad search.
-SUPPORTED_YEARS: list = [2024, 2025]
+SUPPORTED_YEARS: list = [2024, 2025, 2026]
 DEFAULT_FISCAL_YEAR = max(SUPPORTED_YEARS)
 
 
