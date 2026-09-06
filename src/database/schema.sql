@@ -7,13 +7,18 @@ CREATE TABLE IF NOT EXISTS sec_filings (
     ticker      VARCHAR(10) NOT NULL,
     fiscal_year INTEGER NOT NULL,
     filing_type VARCHAR(20) NOT NULL,
+    accession   VARCHAR(25),          -- SEC accession number: unique per filing (10-K, each 10-Q, each 8-K)
     filed_date  DATE,
     cik         VARCHAR(20),
     chunk_index INTEGER,
     chunk_text  TEXT NOT NULL,
     embedding   vector(1536),
     created_at  TIMESTAMP DEFAULT NOW(),
-    UNIQUE (ticker, fiscal_year, chunk_index)
+    -- Keyed on accession, not (ticker, fiscal_year): a company files one 10-K
+    -- but ~4 10-Qs and many 8-Ks per fiscal year, and their chunk_index all
+    -- restart at 0 — keying on (ticker, fiscal_year, chunk_index) would make
+    -- them clobber each other. accession is globally unique per filing.
+    UNIQUE (accession, chunk_index)
 );
 
 -- HNSW index for fast ANN search

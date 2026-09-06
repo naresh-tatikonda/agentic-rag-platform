@@ -15,9 +15,9 @@ def test_no_ticker_abstains():
 
 
 def test_unsupported_ticker_abstains():
-    route, reason, tickers, year = derive_route(["TSLA"], "price_performance", None)
+    route, reason, tickers, year = derive_route(["INTC"], "risk_analysis", None)
     assert route == "abstain"
-    assert tickers == []   # TSLA is not in SUPPORTED_TICKER_VALUES
+    assert tickers == []   # INTC is not in SUPPORTED_TICKER_VALUES
 
 
 def test_price_performance_intent_abstains_even_with_valid_ticker():
@@ -47,13 +47,18 @@ def test_uningested_fiscal_year_abstains():
 
 
 def test_comparison_intent_keeps_multiple_valid_tickers():
-    route, reason, tickers, year = derive_route(["AMD", "AAPL", "AVGO"], "comparison", None)
-    # AMD/AVGO aren't ingested — only AAPL is a supported ticker today
-    assert tickers == ["AAPL"]
+    route, reason, tickers, year = derive_route(["AMD", "AVGO"], "comparison", None)
+    assert tickers == ["AMD", "AVGO"]
+    assert route == "sec"
+
+
+def test_comparison_drops_only_the_unsupported_tickers():
+    route, reason, tickers, year = derive_route(["AMD", "INTC", "AVGO"], "comparison", None)
+    assert tickers == ["AMD", "AVGO"]   # INTC dropped, order preserved
     assert route == "sec"
 
 
 def test_all_tickers_unsupported_abstains_even_for_comparison():
-    route, reason, tickers, year = derive_route(["AMD", "AVGO"], "comparison", None)
+    route, reason, tickers, year = derive_route(["INTC", "NFLX"], "comparison", None)
     assert route == "abstain"
     assert tickers == []

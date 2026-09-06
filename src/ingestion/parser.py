@@ -1,11 +1,12 @@
 import re
 from bs4 import BeautifulSoup
 
-def parse_10k_html(raw_html: str) -> str:
+def parse_filing_html(raw_html: str) -> str:
     """
-    Convert raw 10-K HTML into clean plain text.
-    
-    SEC 10-K filings are delivered as HTML with:
+    Convert raw SEC filing HTML (10-K, 10-Q, or 8-K) into clean plain text.
+    The cleaning is form-agnostic — strip tags, XBRL, scripts, ToC markers.
+
+    SEC filings are delivered as HTML with:
     - Lots of HTML tags (<p>, <table>, <div>, etc.)
     - XBRL inline data tags (financial metadata, not readable text)
     - Page headers, footers, exhibit markers
@@ -101,7 +102,7 @@ if __name__ == "__main__":
     <p>Item 7. Management Discussion Revenue increased 5% year over year.</p>
     </body></html>
     """
-    clean = parse_10k_html(test_html)
+    clean = parse_filing_html(test_html)
     print("Cleaned text:")
     print(clean[:300])
 

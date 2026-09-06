@@ -5,13 +5,15 @@ CREATE TABLE IF NOT EXISTS sec_filings (
     id           SERIAL PRIMARY KEY,
     ticker       VARCHAR(10)  NOT NULL,
     filing_type  VARCHAR(20)  NOT NULL,
+    accession    VARCHAR(25),
     filed_date   DATE,
     cik          VARCHAR(20),
     chunk_index  INTEGER,
     chunk_text   TEXT         NOT NULL,
     embedding    vector(1536),
     created_at   TIMESTAMP    DEFAULT NOW(),
-    fiscal_year  INTEGER
+    fiscal_year  INTEGER,
+    UNIQUE (accession, chunk_index)
 );
 
 CREATE INDEX IF NOT EXISTS sec_filings_embedding_idx

@@ -1,135 +1,129 @@
-import requests
-import json
 import time
-from pathlib import Path
 
-# SEC requires a User-Agent header identifying your app + email
-# Without this, SEC will block your requests (429 Too Many Requests)
-HEADERS = {"User-Agent": "FinSightAI your@email.com"}
+import requests
+from bs4 import BeautifulSoup
 
-# Base URL for all SEC EDGAR API calls
+# SEC requires a User-Agent header identifying your app + email.
+# Without this, SEC blocks requests (403 / 429).
+HEADERS = {"User-Agent": "FinSightAI naresh.tde@gmail.com"}
+
 BASE_URL = "https://data.sec.gov"
+
+# Form types this pipeline knows how to ingest.
+SUPPORTED_FORMS = ("10-K", "10-Q", "8-K")
+
+_cik_cache: dict[str, str] = {}
 
 
 def get_cik(ticker: str) -> str:
     """
-    Convert a stock ticker (e.g. 'AAPL') to a CIK number.
-    CIK (Central Index Key) is SEC's unique ID for every company.
-    We need CIK to look up filings — SEC doesn't use tickers directly.
-    
-    Example: AAPL → 0000320193
+    Convert a stock ticker (e.g. 'AAPL') to a zero-padded 10-digit CIK.
+    SEC's API is keyed on CIK, not ticker. Result is cached per process.
     """
-    # SEC maintains a master JSON file mapping all tickers to CIK numbers
-    tickers_url = "https://www.sec.gov/files/company_tickers.json"
-    r = requests.get(tickers_url, headers=HEADERS)
-    data = r.json()
+    ticker = ticker.upper()
+    if ticker in _cik_cache:
+        return _cik_cache[ticker]
 
-    # The JSON is a dict of dicts: {0: {ticker, cik_str, title}, 1: {...}, ...}
-    # We loop through and match on ticker symbol (case-insensitive)
-    for entry in data.values():
-        if entry["ticker"].upper() == ticker.upper():
-            # CIK must be zero-padded to 10 digits for API calls
-            return str(entry["cik_str"]).zfill(10)
+    r = requests.get("https://www.sec.gov/files/company_tickers.json", headers=HEADERS, timeout=30)
+    r.raise_for_status()
+    for entry in r.json().values():
+        if entry["ticker"].upper() == ticker:
+            cik = str(entry["cik_str"]).zfill(10)
+            _cik_cache[ticker] = cik
+            return cik
 
     raise ValueError(f"Ticker {ticker} not found in SEC database")
 
 
-def get_10k_urls(cik: str, max_filings: int = 3) -> list:
+def get_filing_urls(cik: str, forms: list[str], max_per_form: dict[str, int]) -> list[dict]:
     """
-    Given a CIK, fetch the list of 10-K annual filings.
-    Returns metadata (accession number, filing date) for each filing.
-    
-    Accession number is SEC's unique ID for each individual filing.
-    Example: 0000320193-23-000106 (Apple's 2023 10-K)
-    
-    max_filings: how many 10-Ks to retrieve (3 = last 3 years)
+    Return filing metadata for the requested form types, newest first,
+    capped per form by max_per_form.
+
+    The submissions endpoint's `filings.recent` holds ~1000 of the most
+    recent filings — plenty for a 2-year window of 10-K/10-Q/8-K.
+
+    Returns dicts: {cik, form, accession, filed_date}
     """
-    # EDGAR submissions endpoint returns all filing history for a company
     url = f"{BASE_URL}/submissions/CIK{cik}.json"
-    r = requests.get(url, headers=HEADERS)
-    data = r.json()
+    r = requests.get(url, headers=HEADERS, timeout=30)
+    r.raise_for_status()
+    recent = r.json()["filings"]["recent"]
 
-    # 'filings.recent' contains parallel arrays:
-    # form[i], accessionNumber[i], filingDate[i] all correspond to same filing
-    filings = data["filings"]["recent"]
-    results = []
+    wanted = {f.upper() for f in forms}
+    counts = {f.upper(): 0 for f in forms}
+    results: list[dict] = []
 
-    for i, form in enumerate(filings["form"]):
-        if form == "10-K" and len(results) < max_filings:
-            accession = filings["accessionNumber"][i]  # e.g. 0000320193-23-000106
-            filed_date = filings["filingDate"][i]       # e.g. 2023-11-03
-            results.append({
-                "cik": cik,
-                "accession": accession,
-                "filed_date": filed_date,
-            })
+    for i, form in enumerate(recent["form"]):
+        form_u = form.upper()
+        if form_u not in wanted:
+            continue
+        if counts[form_u] >= max_per_form.get(form_u, 0):
+            continue
+        counts[form_u] += 1
+        results.append({
+            "cik": cik,
+            "form": form_u,
+            "accession": recent["accessionNumber"][i],
+            "filed_date": recent["filingDate"][i],
+        })
 
     return results
 
-def download_10k_text(cik: str, accession: str) -> str:
-    """
-    Download 10-K HTML using SEC EDGAR Archives.
 
-    Key findings from debugging:
-    - Index file is {accession}-index.htm (NOT -index.json)
-    - Actual 10-K document filename follows pattern: {ticker}-{date}.htm
-    - Base path: https://www.sec.gov/Archives/edgar/data/{cik_int}/{accession_fmt}/
-
-    We parse the index HTM to extract the primary document filename,
-    then download that document directly.
+def download_filing_text(cik: str, accession: str, form: str) -> str:
     """
-    cik_int       = str(int(cik))
+    Download the primary HTML document for a filing.
+
+    Strategy: fetch the filing index page, find the row whose type column
+    matches `form`, download that document. If no exact type match (common
+    for 8-Ks where the primary doc is typed oddly), fall back to the first
+    non-index .htm document in the package.
+    """
+    cik_int = str(int(cik))
     accession_fmt = accession.replace("-", "")
-    base_url      = f"https://www.sec.gov/Archives/edgar/data/{cik_int}/{accession_fmt}"
+    base_url = f"https://www.sec.gov/Archives/edgar/data/{cik_int}/{accession_fmt}"
 
-    # Fetch the index page — lists all documents in this filing package
     index_url = f"{base_url}/{accession}-index.htm"
-    print(f"      Fetching index: {index_url}")
-
-    r = requests.get(index_url, headers=HEADERS)
+    r = requests.get(index_url, headers=HEADERS, timeout=30)
     if r.status_code != 200:
-        print(f"      Failed with status: {r.status_code}")
+        print(f"      index fetch failed ({r.status_code}): {index_url}")
         return ""
 
-    # Parse index HTML to find the primary 10-K document link
-    # The primary document is typically ticker-date.htm (e.g. aapl-20250927.htm)
-    from bs4 import BeautifulSoup
     soup = BeautifulSoup(r.text, "html.parser")
 
-    doc_filename = None
+    exact_match = None
+    first_htm = None
     for row in soup.find_all("tr"):
         cells = row.find_all("td")
-        if len(cells) >= 4:
-            # Column 4 in index table is the document type
-            doc_type = cells[3].get_text(strip=True)
-            if doc_type == "10-K":
-                # Column 2 is the document filename link
-                link = cells[2].find("a")
-                if link and link["href"].endswith(".htm"):
-                    doc_filename = link["href"].split("/")[-1]
-                    break
+        if len(cells) < 4:
+            continue
+        doc_type = cells[3].get_text(strip=True)
+        link = cells[2].find("a")
+        if not link or not link.get("href", "").endswith(".htm"):
+            continue
+        fname = link["href"].split("/")[-1]
+        if fname.endswith("-index.htm"):
+            continue
+        if first_htm is None:
+            first_htm = fname
+        if doc_type.upper() == form.upper():
+            exact_match = fname
+            break
 
+    doc_filename = exact_match or first_htm
     if not doc_filename:
-        print("      No 10-K .htm document found in index")
+        print(f"      no .htm document found in index for {accession}")
         return ""
 
-    # Download the actual 10-K document
-    doc_url = f"{base_url}/{doc_filename}"
-    print(f"      Downloading: {doc_url}")
-    time.sleep(0.5)  # SEC rate limit — max 10 req/sec
-    resp = requests.get(doc_url, headers=HEADERS)
+    time.sleep(0.5)  # SEC rate limit: max 10 req/sec
+    resp = requests.get(f"{base_url}/{doc_filename}", headers=HEADERS, timeout=60)
+    return resp.text if resp.status_code == 200 else ""
 
-    return resp.text
 
 if __name__ == "__main__":
-    # Create local directory to store raw downloaded filings
-    Path("data/raw").mkdir(parents=True, exist_ok=True)
-
-    ticker = "AAPL"
-    print(f"Fetching CIK for {ticker}...")
-    cik = get_cik(ticker)
-    print(f"CIK: {cik}")
-
-    print("Fetching 10-K filing list...")
-    filings = get_10k_urls(cik, max_filings=3)
-    print(f"Found {len(filings)} filings: {filings}")
+    cik = get_cik("AAPL")
+    print(f"AAPL CIK: {cik}")
+    filings = get_filing_urls(cik, ["10-K", "10-Q", "8-K"], {"10-K": 2, "10-Q": 4, "8-K": 3})
+    for f in filings:
+        print(f"  {f['form']:6} {f['filed_date']}  {f['accession']}")

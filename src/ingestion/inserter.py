@@ -24,7 +24,8 @@ def get_db_connection():
 
 
 def insert_chunks(chunks: List[dict], ticker: str, fiscal_year: int,
-                  filing_type: str, filed_date: str, cik: str) -> int:
+                  filing_type: str, filed_date: str, cik: str,
+                  accession: str) -> int:
     """
     Bulk insert embedded chunks into the sec_filings pgvector table.
 
@@ -64,6 +65,7 @@ def insert_chunks(chunks: List[dict], ticker: str, fiscal_year: int,
             ticker,
             fiscal_year,
             filing_type,
+            accession,
             filed_date,
             cik,
             chunk["chunk_index"],
@@ -71,17 +73,17 @@ def insert_chunks(chunks: List[dict], ticker: str, fiscal_year: int,
             chunk["embedding"]   # 1536-dim vector → stored as pgvector type
         ))
 
-    # execute_values performs a single multi-row INSERT
-    # Much faster than cursor.execute() in a loop
-    # make re-ingestion idempotent
+    # execute_values performs a single multi-row INSERT.
+    # ON CONFLICT (accession, chunk_index) makes re-ingesting the same
+    # filing a no-op — safe to re-run the pipeline.
     execute_values(
         cur,
         """
         INSERT INTO sec_filings
-            (ticker, fiscal_year, filing_type, filed_date, cik,
+            (ticker, fiscal_year, filing_type, accession, filed_date, cik,
             chunk_index, chunk_text, embedding)
         VALUES %s
-        ON CONFLICT (ticker, fiscal_year, chunk_index) DO NOTHING
+        ON CONFLICT (accession, chunk_index) DO NOTHING
         """,
         rows
     )
@@ -172,9 +174,11 @@ if __name__ == "__main__":
     inserted = insert_chunks(
         chunks=test_chunks,
         ticker="AAPL",
+        fiscal_year=2025,
         filing_type="10-K",
         filed_date="2025-10-31",
-        cik="0000320193"
+        cik="0000320193",
+        accession="0000320193-25-000001",
     )
     print(f"Inserted {inserted} chunks")
 

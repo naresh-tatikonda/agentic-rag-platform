@@ -56,6 +56,7 @@ SEC_ANSWERABLE_INTENTS = {
 }
 
 # -- Ticker + year config — UPDATE THESE when new filings are ingested -------
+# Company-name -> ticker. Keep in sync with what's actually ingested in pgvector.
 SUPPORTED_TICKERS: dict = {
     "Apple": "AAPL",
     "Microsoft": "MSFT",
@@ -64,9 +65,15 @@ SUPPORTED_TICKERS: dict = {
     "Amazon": "AMZN",
     "Nvidia": "NVDA",
     "Meta": "META",
+    "Broadcom": "AVGO",
+    "AMD": "AMD",
+    "Advanced Micro Devices": "AMD",
+    "Tesla": "TSLA",
 }
 SUPPORTED_TICKER_VALUES = set(SUPPORTED_TICKERS.values())
-SUPPORTED_YEARS: list = [2025]   # extend as new fiscal years are ingested
+# Fiscal years present in the corpus. Extend as new filings are ingested —
+# a ticker/year not listed here routes to abstain rather than a bad search.
+SUPPORTED_YEARS: list = [2024, 2025]
 DEFAULT_FISCAL_YEAR = max(SUPPORTED_YEARS)
 
 

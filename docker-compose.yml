@@ -26,7 +26,10 @@ services:
     container_name: ragdb
     restart: unless-stopped
     ports:
-      - "5432:5432"
+      # Host 5433 (not 5432) — a native Postgres on the dev machine already
+      # binds 127.0.0.1:5432 and would shadow this container. Inside the
+      # compose network other services still reach it as ragdb:5432.
+      - "5433:5432"
     env_file:
       - .env
     volumes:

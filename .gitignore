@@ -12,3 +12,4 @@ tests/eval/results/
 
 .claude/settings.local.json
 CLAUDE.md
+.venv-ingest/
